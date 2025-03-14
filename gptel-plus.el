@@ -38,8 +38,6 @@
   "Enhancements for `gptel'."
   :group 'gptel)
 
-;;;;; Estimate cost
-
 (defcustom gptel-plus-tokens-per-word 1.4
   "The approximate number of tokens per word.
 Used to estimate input costs, based on the number of words in the prompt."
@@ -78,7 +76,7 @@ To disable warnings, set this value to nil."
 
 ;;;; Functions
 
-;;;;; Estimate cost
+;;;;; Cost estimation
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
 (defun gptel-plus-get-total-cost ()
@@ -313,7 +311,118 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 		gptel--old-header-line nil)
 	(setq mode-line-process nil)))))
 
-;;;;; List and remove files from context
+;;;;; Automatic mode activation
+
+(defun gptel-plus-enable-gptel-in-org ()
+  "Enable `gptel-mode' in `org-mode' files with `gptel' data."
+  (when (gptel-plus-file-has-gptel-org-property-p)
+    (gptel-plus-enable-gptel-common)))
+
+(defun gptel-plus-enable-gptel-in-markdown ()
+  "Enable `gptel-mode' in `markdown-mode' files with `gptel' data."
+  (when (gptel-plus-file-has-gptel-local-variable-p)
+    (gptel-plus-enable-gptel-common)))
+
+(declare-function breadcrumb-mode "breadcrumb")
+(defun gptel-plus-enable-gptel-common ()
+  "Enable `gptel-mode' and in any buffer with `gptel' data."
+  (let ((buffer-modified-p (buffer-modified-p)))
+    (gptel-mode)
+    ;; `breadcrumb-mode' interferes with the `gptel' header line
+    (when (bound-and-true-p breadcrumb-mode)
+      (breadcrumb-mode -1))
+    ;; prevent the buffer from becoming modified merely because `gptel-mode'
+    ;; is enabled
+    (unless buffer-modified-p
+      (save-buffer))))
+
+(defun gptel-plus-file-has-gptel-local-variable-p ()
+  "Return t iff the current buffer has a `gptel' local variable."
+  (cl-some (lambda (var)
+	     (local-variable-p var))
+	   gptel-plus-local-variables))
+
+(autoload 'org-entry-get "org")
+(defun gptel-plus-file-has-gptel-org-property-p ()
+  "Return t iff the current buffer has a `gptel' Org property."
+  (cl-some (lambda (prop)
+	     (org-entry-get (point-min) prop))
+	   gptel-plus-org-properties))
+
+;;;;; Context persistence
+
+;;;;;; Save
+
+(autoload 'org-set-property "org")
+(defun gptel-plus-save-file-context ()
+  "Save the current `gptel' file context in file visited by the current buffer.
+In Org files, saves as a file property. In Markdown, as a file-local variable."
+  (interactive)
+  (if (derived-mode-p 'org-mode 'markdown-mode)
+      (when (or (not (gptel-plus-get-saved-context))
+		(yes-or-no-p "Overwrite existing file context? "))
+	(let ((context (pcase major-mode
+			 ('org-mode (gptel-plus-save-file-context-in-org))
+			 ('markdown-mode (gptel-plus-save-file-context-in-markdown)))))
+	  (message "Saved `gptel' context: %s" context)))
+    (user-error "Not in and Org or Markdown buffer")))
+
+(defun gptel-plus-save-file-context-in-org ()
+  "Save the current `gptel' file context in file visited by the current Org buffer."
+  (save-excursion
+    (goto-char (point-min))
+    (org-set-property "GPTEL_CONTEXT" (prin1-to-string gptel-context--alist))))
+
+(defun gptel-plus-save-file-context-in-markdown ()
+  "Save the current `gptel' file context in file visited by the current MD buffer."
+  (gptel-plus-remove-local-variables-section)
+  (let ((context (format "%S" gptel-context--alist)))
+    (add-file-local-variable 'gptel-plus-context context)))
+
+(defun gptel-plus-remove-local-variables-section ()
+  "Remove the existing Local Variables section from the current buffer."
+  (save-excursion
+    (goto-char (point-max))
+    (when (re-search-backward "^<!-- Local Variables: -->" nil t)
+      (let ((start (point)))
+        (when (re-search-forward "^<!-- End: -->" nil t)
+          (delete-region start (point))
+          (delete-blank-lines))))))
+
+;;;;;; Get saved
+
+(defun gptel-plus-get-saved-context ()
+  "Get the saved `gptel' context from the file visited by the current buffer."
+  (pcase major-mode
+    ('org-mode
+     (when-let* ((gptel-context-prop (org-entry-get (point-min) "GPTEL_CONTEXT")))
+       (read gptel-context-prop)))
+    ('markdown-mode gptel-plus-context)
+    (_ (user-error "Not in and Org or Markdown buffer"))))
+
+;;;;;; Restore
+
+(defun gptel-plus-restore-file-context ()
+  "Restore the saved file context from the file visited by the current buffer."
+  (interactive)
+  (if-let ((context (gptel-plus-get-saved-context)))
+      (when (or (not gptel-context--alist)
+		(y-or-n-p "Overwrite current `gptel' context? "))
+	(mapc (lambda (monolist)
+		(gptel-context-add-file (car monolist)))
+	      context))
+    (message "No saved `gptel' context found.")))
+
+;;;;;; Clear
+
+;;;###autoload
+(defun gptel-plus-clear-file-context ()
+  "Clear the current `gptel' file context."
+  (interactive)
+  (gptel-context-remove-all)
+  (message "Cleared `gptel' context."))
+
+;;;;; Context management
 
 (defun gptel-plus-list-context-files ()
   "List all files in the current `gptel' context sorted by size.
@@ -430,117 +539,6 @@ updates the cost, and then refreshes the buffer."
     (with-current-buffer buf
       (gptel-plus-list-context-files-internal)
       (message "Context file listing refreshed."))))
-
-;;;;; Enable gptel
-
-(defun gptel-plus-enable-gptel-in-org ()
-  "Enable `gptel-mode' in `org-mode' files with `gptel' data."
-  (when (gptel-plus-file-has-gptel-org-property-p)
-    (gptel-plus-enable-gptel-common)))
-
-(defun gptel-plus-enable-gptel-in-markdown ()
-  "Enable `gptel-mode' in `markdown-mode' files with `gptel' data."
-  (when (gptel-plus-file-has-gptel-local-variable-p)
-    (gptel-plus-enable-gptel-common)))
-
-(declare-function breadcrumb-mode "breadcrumb")
-(defun gptel-plus-enable-gptel-common ()
-  "Enable `gptel-mode' and in any buffer with `gptel' data."
-  (let ((buffer-modified-p (buffer-modified-p)))
-    (gptel-mode)
-    ;; `breadcrumb-mode' interferes with the `gptel' header line
-    (when (bound-and-true-p breadcrumb-mode)
-      (breadcrumb-mode -1))
-    ;; prevent the buffer from becoming modified merely because `gptel-mode'
-    ;; is enabled
-    (unless buffer-modified-p
-      (save-buffer))))
-
-(defun gptel-plus-file-has-gptel-local-variable-p ()
-  "Return t iff the current buffer has a `gptel' local variable."
-  (cl-some (lambda (var)
-	     (local-variable-p var))
-	   gptel-plus-local-variables))
-
-(autoload 'org-entry-get "org")
-(defun gptel-plus-file-has-gptel-org-property-p ()
-  "Return t iff the current buffer has a `gptel' Org property."
-  (cl-some (lambda (prop)
-	     (org-entry-get (point-min) prop))
-	   gptel-plus-org-properties))
-
-;;;;; Save, restore & clear file context
-
-;;;;;; Save
-
-(autoload 'org-set-property "org")
-(defun gptel-plus-save-file-context ()
-  "Save the current `gptel' file context in file visited by the current buffer.
-In Org files, saves as a file property. In Markdown, as a file-local variable."
-  (interactive)
-  (if (derived-mode-p 'org-mode 'markdown-mode)
-      (when (or (not (gptel-plus-get-saved-context))
-		(yes-or-no-p "Overwrite existing file context? "))
-	(let ((context (pcase major-mode
-			 ('org-mode (gptel-plus-save-file-context-in-org))
-			 ('markdown-mode (gptel-plus-save-file-context-in-markdown)))))
-	  (message "Saved `gptel' context: %s" context)))
-    (user-error "Not in and Org or Markdown buffer")))
-
-(defun gptel-plus-save-file-context-in-org ()
-  "Save the current `gptel' file context in file visited by the current Org buffer."
-  (save-excursion
-    (goto-char (point-min))
-    (org-set-property "GPTEL_CONTEXT" (prin1-to-string gptel-context--alist))))
-
-(defun gptel-plus-save-file-context-in-markdown ()
-  "Save the current `gptel' file context in file visited by the current MD buffer."
-  (gptel-plus-remove-local-variables-section)
-  (let ((context (format "%S" gptel-context--alist)))
-    (add-file-local-variable 'gptel-plus-context context)))
-
-(defun gptel-plus-remove-local-variables-section ()
-  "Remove the existing Local Variables section from the current buffer."
-  (save-excursion
-    (goto-char (point-max))
-    (when (re-search-backward "^<!-- Local Variables: -->" nil t)
-      (let ((start (point)))
-        (when (re-search-forward "^<!-- End: -->" nil t)
-          (delete-region start (point))
-          (delete-blank-lines))))))
-
-;;;;;; Get saved
-
-(defun gptel-plus-get-saved-context ()
-  "Get the saved `gptel' context from the file visited by the current buffer."
-  (pcase major-mode
-    ('org-mode
-     (when-let* ((gptel-context-prop (org-entry-get (point-min) "GPTEL_CONTEXT")))
-       (read gptel-context-prop)))
-    ('markdown-mode gptel-plus-context)
-    (_ (user-error "Not in and Org or Markdown buffer"))))
-
-;;;;;; Restore
-
-(defun gptel-plus-restore-file-context ()
-  "Restore the saved file context from the file visited by the current buffer."
-  (interactive)
-  (if-let ((context (gptel-plus-get-saved-context)))
-      (when (or (not gptel-context--alist)
-		(y-or-n-p "Overwrite current `gptel' context? "))
-	(mapc (lambda (monolist)
-		(gptel-context-add-file (car monolist)))
-	      context))
-    (message "No saved `gptel' context found.")))
-
-;;;;;; Clear
-
-;;;###autoload
-(defun gptel-plus-clear-file-context ()
-  "Clear the current `gptel' file context."
-  (interactive)
-  (gptel-context-remove-all)
-  (message "Cleared `gptel' context."))
 
 (provide 'gptel-plus)
 ;;; gptel-plus.el ends here
