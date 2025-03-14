@@ -55,8 +55,10 @@ cost estimate = (actual word count in buffer or region + actual word count in co
 
 The following user options may be modified to change the relevant estimation parameters:
 
-- =gptel-plus-tokens-per-word=: Set to =1.4=, based on a cursory Google search and advice from Claude Sonnet 3.5.
 - =gptel-plus-tokens-in-output=: Set to =100=, based on my own intuition.
+- =gptel-plus-tokens-per-word=: Set to =1.5=, based on a cursory Google search and advice from Claude Sonnet 3.5.
+
+(I have since updated the value from =1.4= to =1.5= based on the following data point. One of my recent requests using the Anthropic API was rejected because it had exceeded the 200,000 token limit: the request was reported to contain roughly 205,000 tokens. In turn, the total word count in the context of my request, as computed by =gptel-plus-count-words-in-context= and =gptel-plus-count-words-in-buffer= was 135,000. This suggests a token-to-word ratio of 205,000 / 135,000 ≈ 1.52.)
 
 The package also warns the user immediately after running =gptel-send= when the cost of the current request is estimated to exceed a configurable threshold:
 
@@ -94,3 +96,4 @@ To enable this feature, add the relevant hooks to your Emacs configuration:
 * License
 
 GPL-3.0
+

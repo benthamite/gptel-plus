@@ -38,7 +38,7 @@
   "Enhancements for `gptel'."
   :group 'gptel)
 
-(defcustom gptel-plus-tokens-per-word 1.4
+(defcustom gptel-plus-tokens-per-word 1.5
   "The approximate number of tokens per word.
 Used to estimate input costs, based on the number of words in the prompt."
   :type 'number
