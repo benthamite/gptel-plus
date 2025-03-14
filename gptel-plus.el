@@ -362,7 +362,7 @@ Lists key bindings dynamically based on the current mode's keymap."
      (define-key map (kbd "x") #'gptel-plus-toggle-mark)
      (define-key map (kbd "D") #'gptel-plus-remove-flagged-context-files)
      (define-key map (kbd "g") #'gptel-plus-refresh-context-files-buffer)
-     (define-key map (kbd "q") #'files-extras-kill-this-buffer)
+     (define-key map (kbd "q") #'kill-this-buffer)
      map))
   (read-only-mode 1))
 
