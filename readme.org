@@ -47,7 +47,7 @@ If you use the [[https://github.com/progfolio/elpaca][elpaca]] package manager, 
 
 =gptel-plus= estimates, and displays in the header line, the approximate cost of the user’s current interaction. This may help to make more informed decisions and to keep track of expenses when using paid LLM APIs.
 
-The cost is only /approximate/ because (1) it is based on counting the number of words in the current buffer or region and in the context (if any) and using a fixed word-to-token conversion factor to perform the estimation; (2) it assumes a fixed number of words will be sent as output; and (3) it does not even try to estimate the cost of images. Here’s the estimation formula:
+The cost is only /approximate/ because (1) it is based on counting the number of words in the current buffer or region and in the context (if any), and using a fixed word-to-token conversion factor to perform the estimation; (2) it assumes a fixed number of words will be sent as output; and (3) it does not even try to estimate the cost of images. Here’s the estimation formula:
 
 #+begin_src 
 cost estimate = (actual word count in buffer or region + actual word count in context + assumed word count in output) × tokens per word
