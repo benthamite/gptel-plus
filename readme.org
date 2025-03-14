@@ -1,0 +1,97 @@
+#+TITLE: gptel-plus
+#+AUTHOR: Pablo Stafforini
+
+* About
+
+=gptel-plus= provides a few enhancements for [[https://github.com/karthink/gptel][gptel]], a package for interfacing with large language models in Emacs.
+
+* Installation
+
+** Manual
+
+Clone this repository to your Emacs load path and add this to your =init.el= file:
+
+#+begin_src emacs-lisp
+(require 'gptel-plus)
+#+end_src
+
+** With =use-pacakge=
+:PROPERTIES:
+:CUSTOM_ID: with-use-pacakge
+:END:
+If you use the [[https://github.com/progfolio/elpaca][elpaca]] package manager, add this your =init.el= file:
+
+#+begin_src emacs-lisp
+;; with vc
+(use-package gptel-plus
+  :vc (:url "https://github.com/benthamite/gptel-plus"))
+
+;; with elpaca
+(use-package gptel-plus
+  :ensure (:host github :repo "benthamite/gptel-plus"))
+
+;; with straight
+(use-package gptel-plus
+  :straight (:host github :repo "benthamite/gptel-plus"))
+
+;; with quelpa
+(use-package gptel-plus
+  :quelpa (gptel-plus :fetcher github :repo "benthamite/gptel-plus"))
+#+end_src
+
+* Features
+
+** Cost estimation
+
+=gptel-plus= estimates, and displays in the header line, the approximate cost of the user’s current interaction. This may help to make more informed decisions and to keep track of expenses when using paid LLM APIs.
+
+The cost is approximate because (1) it is based on counting the number of words in the current buffer or region and in the context (if any) and using a fixed word-to-token conversion factor to perform the estimation and (2) it assumes a fixed number of words will be sent as output, as follows:
+
+#+begin_src 
+cost estimate = (actual word count in buffer or region + actual word count in context + assumed word count in output) × tokens per word
+#+end_src
+
+The following user options may be modified to change the relevant estimation parameters:
+
+- =gptel-plus-tokens-per-word=: Set to =1.4=, based on a cursory Google search and advice from Claude Sonnet 3.5.
+- =gptel-plus-tokens-in-output=: Set to =100=, based on my own intuition.
+
+The package also warns the user immediately after running =gptel-send= when the cost of the current request is estimated to exceed a configurable threshold:
+
+- =gptel-plus-cost-warning-threshold=: Set to =0.15=, based on my personal preference.
+
+To disable the warning, set this option to =nil=.  
+  
+** Context persistence
+
+=gptel-plus= allows users to save and restore their context settings across sessions. The following commands are available:
+
+- =gptel-plus-save-file-context=: Save the current context to the file.
+- =gptel-plus-restore-file-context=: Restore previously saved context.
+
+Context is stored as file-local variables in Markdown files or as properties in Org files.
+
+** Context file management
+
+=gptel-plus= provides a couple of helper commands to help manage context files:
+
+- =gptel-plus-list-context-files=: View and manage all files in the current context, in descending order of size. Files can be marked for removal (=x=) and removed in bulk (=D=). This is most useful when the user wants to reduce the cost of the current interaction by removing large files from the context.
+- =gptel-plus-clear-file-context=: Remove all files from context
+
+** Automatic mode activation
+
+=gptel-plus= automatically activates =gptel-mode= in files that contain =gptel= data:
+
+- In Org files with =gptel= properties
+- In Markdown files with =gptel= file-local variables
+
+To activate this feature, add the relevant hooks to your Emacs configuration:
+
+#+begin_src emacs-lisp
+(add-hook 'org-mode-hook #'gptel-plus-enable-gptel-in-org)
+(add-hook 'markdown-mode-hook #'gptel-plus-enable-gptel-in-markdown)
+#+end_src
+
+* License
+
+GPL-3.0
