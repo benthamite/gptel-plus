@@ -58,7 +58,7 @@ The following user options may be modified to change the relevant estimation par
 
 The package also warns the user immediately after running =gptel-send= when the cost of the current request is estimated to exceed a configurable threshold:
 
-- =gptel-plus-cost-warning-threshold=: Set to =0.15=, based on my personal preference.
+- =gptel-plus-cost-warning-threshold=: Set to =0.15= (i.e., 15 cents), based on my personal preference.
 
 To disable the warning, set this option to =nil=.  
   
