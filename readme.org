@@ -5,6 +5,8 @@
 
 =gptel-plus= provides a few enhancements for [[https://github.com/karthink/gptel][gptel]], a package for interfacing with large language models in Emacs.
 
+This “package” evolved out of my own private =gptel= extensions, which I am now publishing separately to make it easier for others to try these enhancements. Calling it a “package” is a bit of a stretch, as it is really just a single file with a few functions and user options. Adjust your expectations accordingly.
+
 * Installation
 
 ** Manual
