@@ -64,7 +64,7 @@ To disable the warning, set this option to =nil=.
   
 ** Context persistence
 
-=gptel-plus= allows users to save and restore their context settings across sessions. The following commands are available:
+=gptel-plus= allows the user to save and restore context files across sessions. The following commands are available:
 
 - =gptel-plus-save-file-context=: Save the current context to the file.
 - =gptel-plus-restore-file-context=: Restore previously saved context.
@@ -85,7 +85,7 @@ Context is stored as file-local variables in Markdown files or as properties in 
 - In Org files with =gptel= properties
 - In Markdown files with =gptel= file-local variables
 
-To activate this feature, add the relevant hooks to your Emacs configuration:
+To enable this feature, add the relevant hooks to your Emacs configuration:
 
 #+begin_src emacs-lisp
 (add-hook 'org-mode-hook #'gptel-plus-enable-gptel-in-org)
