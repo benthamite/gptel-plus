@@ -75,10 +75,7 @@ Context is stored as file-local variables in Markdown files or as properties in 
 
 ** Context file management
 
-=gptel-plus= provides a couple of helper commands to help manage context files:
-
-- =gptel-plus-list-context-files=: View and manage all files in the current context, in descending order of size. Files can be marked for removal (=x=) and removed in bulk (=D=). This is most useful when the user wants to reduce the cost of the current interaction by removing large files from the context.
-- =gptel-plus-clear-file-context=: Remove all files from context
+=gptel-plus= provides the command =gptel-plus-list-context-files= to view and manage all files in the current context, in descending order of size. Files can be marked for removal (=x=) and removed in bulk (=D=). This is most useful when the user wants to reduce the cost of the current interaction by removing large files from the context.
 
 ** Automatic mode activation
 

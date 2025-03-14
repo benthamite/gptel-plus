@@ -413,15 +413,6 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
 	      context))
     (message "No saved `gptel' context found.")))
 
-;;;;;; Clear
-
-;;;###autoload
-(defun gptel-plus-clear-file-context ()
-  "Clear the current `gptel' file context."
-  (interactive)
-  (gptel-context-remove-all)
-  (message "Cleared `gptel' context."))
-
 ;;;;; Context management
 
 (defun gptel-plus-list-context-files ()
