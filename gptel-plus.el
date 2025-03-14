@@ -361,10 +361,10 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
   (if (derived-mode-p 'org-mode 'markdown-mode)
       (when (or (not (gptel-plus-get-saved-context))
 		(yes-or-no-p "Overwrite existing file context? "))
-	(let ((context (pcase major-mode
-			 ('org-mode (gptel-plus-save-file-context-in-org))
-			 ('markdown-mode (gptel-plus-save-file-context-in-markdown)))))
-	  (message "Saved `gptel' context: %s" context)))
+	(pcase major-mode
+	  ('org-mode (gptel-plus-save-file-context-in-org))
+	  ('markdown-mode (gptel-plus-save-file-context-in-markdown)))
+	(message "Saved `gptel' context: %s" (prin1-to-string gptel-context--alist)))
     (user-error "Not in and Org or Markdown buffer")))
 
 (defun gptel-plus-save-file-context-in-org ()
