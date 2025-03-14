@@ -461,7 +461,6 @@ Lists key bindings dynamically based on the current mode's keymap."
           (put-text-property start (+ start 3) 'gptel-flag nil))))
     (goto-char (point-min))))
 
-(declare-function files-extras-kill-this-buffer "files-extras")
 (define-derived-mode gptel-context-files-mode special-mode "GPT Context Files"
   "Major mode for flagging gptel context files for removal."
   (setq-local truncate-lines t)
