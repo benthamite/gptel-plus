@@ -456,6 +456,7 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
   (if-let ((context (gptel-plus-get-saved-context)))
       (when (or (not gptel-context--alist)
 		(y-or-n-p "Overwrite current `gptel' context? "))
+	(gptel-context-remove-all)
 	(mapc (lambda (monolist)
 		(gptel-context-add-file (car monolist)))
 	      context))
