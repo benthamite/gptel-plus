@@ -56,25 +56,13 @@ To disable warnings, set this value to nil."
   :type 'number
   :group 'gptel-plus)
 
-;;;; Variables
 
-(defvar-local gptel-plus-context nil
-  "The context for the current buffer.")
 
-(defconst gptel-plus-local-variables
-  '(gptel-mode gptel-model gptel--backend-name gptel--bounds)
-  "A list of relevant `gptel' file-local variables.")
 
-(defconst gptel-plus-org-properties
-  '("GPTEL_SYSTEM" "GPTEL_BACKEND" "GPTEL_MODEL"
-    "GPTEL_TEMPERATURE" "GPTEL_MAX_TOKENS"
-    "GPTEL_NUM_MESSAGES_TO_SEND")
-  "A list of relevant `gptel' Org properties.")
 
 (defvar gptel-plus--context-cost nil
   "Cached cost calculation for context files.")
 
-;;;; Functions
 
 ;;;;; Cost estimation
 
@@ -317,6 +305,16 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 ;;;;; Automatic mode activation
 
+(defconst gptel-plus-local-variables
+  '(gptel-mode gptel-model gptel--backend-name gptel--bounds)
+  "A list of relevant `gptel' file-local variables.")
+
+(defconst gptel-plus-org-properties
+  '("GPTEL_SYSTEM" "GPTEL_BACKEND" "GPTEL_MODEL"
+    "GPTEL_TEMPERATURE" "GPTEL_MAX_TOKENS"
+    "GPTEL_NUM_MESSAGES_TO_SEND")
+  "A list of relevant `gptel' Org properties.")
+
 (defun gptel-plus-enable-gptel-in-org ()
   "Enable `gptel-mode' in `org-mode' files with `gptel' data."
   (when (gptel-plus-file-has-gptel-org-property-p)
@@ -354,6 +352,9 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 	   gptel-plus-org-properties))
 
 ;;;;; Context persistence
+
+(defvar-local gptel-plus-context nil
+  "The context for the current buffer.")
 
 ;;;;;; Save
 
