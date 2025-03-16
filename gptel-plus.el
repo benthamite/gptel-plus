@@ -91,9 +91,9 @@ response of 100 tokens, which appears to be the average LLM response length. (To
 change this default, customize `gptel-plus-tokens-in-output'.)
 
 Note that, currently, images are not included in the cost calculation."
-  (let ((total-cost (+ (gptel-plus-get-input-cost)
-		       (gptel-plus-get-output-cost))))
-    (gptel-plus-normalize-cost total-cost)))
+  (when-let ((input-cost (gptel-plus-get-input-cost))
+             (output-cost (gptel-plus-get-output-cost)))
+    (gptel-plus-normalize-cost (+ input-cost output-cost))))
 
 (defun gptel-plus-get-input-cost ()
   "Return cost for the input."
@@ -223,13 +223,17 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 				     'mouse-face 'highlight
 				     'help-echo "System message for session"))
 				   (el-patch-add
-				     (cost
-				      (when-let ((cost (gptel-plus-get-total-cost)))
-					(propertize
-					 (buttonize (format "[Cost: $%.2f]" cost)
-						    (lambda (&rest _) (gptel-menu)))
-					 'mouse-face 'highlight
-					 'help-echo "Cost of the current prompt"))))
+				     (cost (let* ((cost (gptel-plus-get-total-cost))
+						  (cost-msg (if cost
+								(format "[Cost: $%.2f]" cost)
+							      "[Cost: N/A]")))
+					     (propertize
+					      (buttonize cost-msg
+							 (lambda (&rest _) (gptel-menu)))
+					      'mouse-face 'highlight
+					      'help-echo (if cost
+							     "Cost of the current prompt"
+							   "There is no cost information available for this model")))))
 				   (context
 				    (and gptel-context--alist
 					 (cl-loop for entry in gptel-context--alist
