@@ -31,6 +31,7 @@
 (require 'gptel)
 (require 'gptel-context)
 (require 'el-patch)
+(require 'project)
 
 ;;;; User options
 
@@ -530,6 +531,297 @@ updates the cost, and then refreshes the buffer."
       (gptel-plus-list-context-files-internal)
       (message "Context file listing refreshed."))))
 
+;;;;; Dynamic conext selection
+
+(defconst gptel-smart-context-description-file ".file-contents.json"
+  "Name of the JSON file containing descriptions of project files.
+This file should be located at the project root.")
+
+(defun gptel-smart-context--get-description-file-path ()
+  "Get the path to the description file for the current project."
+  (when-let* ((project (project-current))
+	      (root (project-root project)))
+    (expand-file-name gptel-smart-context-description-file root)))
+
+(defun gptel-smart-context--read-descriptions ()
+  "Read file descriptions from the JSON description file.
+Returns a hash table mapping relative file paths to descriptions."
+  (let ((desc-file (gptel-smart-context--get-description-file-path))
+	(descriptions (make-hash-table :test 'equal)))
+    (when (and desc-file (file-exists-p desc-file))
+      (with-temp-buffer
+	(insert-file-contents desc-file)
+	(goto-char (point-min))
+	(condition-case nil
+	    (let ((json-object-type 'hash-table)
+		  (json-array-type 'list)
+		  (json-key-type 'string))
+	      (setq descriptions (json-read)))
+	  (error (message "Error parsing gptel description file: %s" desc-file)))))
+    descriptions))
+
+(defun gptel-smart-context--save-descriptions (descriptions)
+  "Save DESCRIPTIONS hash table to the JSON description file."
+  (when-let ((desc-file (gptel-smart-context--get-description-file-path)))
+    (with-temp-file desc-file
+      (insert (json-encode descriptions)))))
+
+(defun gptel-smart-context-test-descriptions ()
+  "Test the AI-generated file descriptions for a sample of project files."
+  (interactive)
+  (if-let* ((project (project-current))
+            (_ (message "Found project: %s" (project-root project)))
+            (eligible-files (gptel-smart-context--get-eligible-files))
+            (_ (message "Got %d eligible files" (length eligible-files))))
+      (let* ((readme-files (seq-filter
+                            (lambda (f)
+                              (string-match-p "readme\\|README" (file-name-nondirectory f)))
+                            eligible-files))
+             (_ (message "Found %d README files" (length readme-files)))
+             (other-files (seq-difference eligible-files readme-files))
+             (sample-files (append readme-files
+                                   (seq-take other-files (min
+                                                          (- 6 (length readme-files))
+                                                          (length other-files)))))
+             (_ (message "Selected %d sample files" (length sample-files)))
+             (buffer (get-buffer-create "*gptel-file-descriptions*")))
+        ;; Now actually do something with the sample files
+        (with-current-buffer buffer
+          (erase-buffer)
+          (insert "# File Description Test\n\n")
+          (dolist (file sample-files)
+            (insert (format "## %s\n\n" (file-relative-name file (project-root project))))
+            (insert "Sample content:\n=\n")
+            (condition-case err
+                (insert-file-contents file nil 0 1000)
+              (error (insert (format "Error reading file: %S" err))))
+            (goto-char (point-max))
+            (insert "\n=\n\n")))
+        (display-buffer buffer)
+        (message "Generated file description test with %d files" (length sample-files)))
+    (message "Not in a project or no eligible files found")))
+
+(defun gptel-smart-context--get-eligible-files (&optional root extensions max-files)
+  "Get eligible files from ROOT directory (default: project root).
+Filter by EXTENSIONS if provided, otherwise include all files.
+Excludes git-ignored files using `gptel-context--git-skip-p`.
+If MAX-FILES is provided, limit the number of returned files."
+  (unless root
+    (when-let ((project (project-current)))
+      (setq root (project-root project))))
+  (unless root
+    (user-error "No root directory specified and not in a project"))
+  
+  (let ((files nil)
+        (count 0))
+    (dolist (file (directory-files-recursively
+                   root ".*" t))
+      (when (and (file-regular-p file)
+                 (not (gptel-context--git-skip-p file))
+                 (or (not extensions)
+                     (seq-some (lambda (ext)
+                                 (string-match-p (concat "\\." ext "$") file))
+                               extensions))
+                 (or (not max-files)
+                     (< count max-files)))
+        (push file files)
+        (when max-files (cl-incf count))))
+    files))
+
+(defun gptel-smart-context--create-description-file ()
+  "Create AI-generated descriptions for all eligible files in the current project."
+  (interactive)
+  (when-let* ((eligible-files (gptel-smart-context--get-eligible-files))
+              (desc-file (gptel-smart-context--get-description-file-path)))
+    (message "Analyzing files with AI. This may take a moment...")
+
+    ;; Start with existing descriptions if available
+    (let* ((all-descriptions (gptel-smart-context--read-descriptions))
+           ;; Filter for files that don't have descriptions yet
+           (files-to-process
+            (cl-remove-if
+             (lambda (file)
+               (or (gethash (file-name-nondirectory file) all-descriptions)
+                   ;; Don't process the description file itself
+                   (string= (expand-file-name file)
+                            (expand-file-name desc-file))))
+             eligible-files))
+           (batch-size 8)
+           (batches (seq-partition files-to-process batch-size)))
+
+      ;; Add special hard-coded description for .gptel-files.json
+      (puthash (file-name-nondirectory desc-file)
+               "A JSON file used by gptel to store descriptions of project files for dynamic context selection."
+               all-descriptions)
+
+      ;; Process each batch
+      (cl-loop for batch in batches
+               for batch-num from 1
+               when batch do
+               (progn
+                 (message "Processing batch %d of %d (%d files total)..."
+                          batch-num (length batches) (length files-to-process))
+                 
+                 (let* ((file-contents
+                         (mapcar (lambda (file)
+                                   (cons file
+                                         (condition-case _
+                                             (with-temp-buffer
+                                               (insert-file-contents file)
+                                               (buffer-substring-no-properties
+                                                (point-min)
+                                                (min (point-max) 4000)))
+                                           (error (format "Error reading file: %s"
+                                                          file)))))
+                                 batch))
+                        (prompt-text
+                         (concat
+                          "For each of the following files, generate a brief, concise description (maximum 1-2 sentences).\n"
+                          "Focus on explaining what the file does or contains, not just its structure.\n\n"
+                          (mapconcat
+                           (lambda (file-content)
+                             (format "File: %s\n\nContent snippet:\n=\n%s\n=\n"
+                                     (file-name-nondirectory (car file-content))
+                                     (truncate-string-to-width
+                                      (cdr file-content)
+                                      2000 nil nil "...")))
+                           file-contents
+                           "\n\n")
+                          "\nOutput format: JSON object with filenames as keys and descriptions as values."))
+                        (response-buffer (generate-new-buffer "*gptel-file-description-response*"))
+                        (callback-fn
+                         (lambda (response info)
+                           (when (stringp response)
+                             (with-current-buffer response-buffer
+                               (erase-buffer)
+                               (insert response)
+                               
+                               ;; Process the response to extract descriptions
+                               (condition-case err
+                                   (progn
+                                     (goto-char (point-min))
+                                     ;; Find start of JSON object
+                                     (when (re-search-forward "\\({\\|\\[\\)" nil t)
+                                       (goto-char (match-beginning 0))
+                                       (let ((json-object-type 'hash-table)
+                                             (json-array-type 'list)
+                                             (json-key-type 'string))
+                                         (let ((desc-hash (json-read)))
+                                           (maphash (lambda (k v)
+                                                      (puthash k v all-descriptions))
+                                                    desc-hash)))))
+                                 (error
+                                  ;; Fallback to line-by-line parsing
+                                  (message "Error parsing JSON: %S - Falling back to line parsing" err)
+                                  (goto-char (point-min))
+                                  (dolist (line (split-string (buffer-string) "\n" t))
+                                    (when (string-match "^\\([^:]+\\):\\s-*\\(.+\\)$" line)
+                                      (let ((filename (match-string 1 line))
+                                            (desc (match-string 2 line)))
+                                        (puthash filename desc all-descriptions))))))
+                               
+                               ;; Save descriptions after each batch
+                               (gptel-smart-context--save-descriptions all-descriptions)
+                               (message "Updated %s with %d file descriptions"
+                                        desc-file (hash-table-count all-descriptions))
+                               (kill-buffer response-buffer))))))
+                   
+                   ;; Send the request with our callback
+                   (gptel-request prompt-text
+                     :callback callback-fn
+                     :system "You are a code and documentation analyzer. Your task is to generate concise, meaningful descriptions of files based on their content.")
+                   
+                   ;; Add a small delay between batches to avoid rate limiting
+                   (when (< batch-num (length batches))
+                     (sleep-for 2))))
+               finally do
+               (message "Completed analyzing %d files. Description file has %d entries."
+                        (length files-to-process) (hash-table-count all-descriptions))))
+    t))
+
+(defun gptel-smart-context-select-for-query (prompt)
+  "Select relevant files from the project based on PROMPT and add to context.
+Uses the AI-generated descriptions to match files against the query."
+  (interactive "sEnter your query: ")
+  (when-let* ((desc-file (gptel-smart-context--get-description-file-path))
+              ((file-exists-p desc-file))
+              (descriptions (gptel-smart-context--read-descriptions))
+              ((> (hash-table-count descriptions) 0)))
+    
+    ;; Create a query to the AI to select relevant files
+    (let* ((file-descriptions
+            (cl-loop for filename being the hash-keys of descriptions
+                     using (hash-values description)
+                     collect (cons filename description)))
+           (selection-prompt
+            (concat
+             "I'm working on a project and need to select the most relevant files for a specific query.\n\n"
+             "Query: " prompt "\n\n"
+             "Available files:\n"
+             (mapconcat
+              (lambda (file-desc)
+                (format "- %s: %s" (car file-desc) (cdr file-desc)))
+              file-descriptions "\n")
+             "\n\nPlease select up to 5 files most relevant to my query. "
+             "Reply with a JSON array containing only the filenames, nothing else: [\"file1.ext\", \"file2.ext\"]"))
+           (selected-files-buffer (generate-new-buffer "*gptel-selected-files*"))
+           (callback-fn
+            (lambda (response info)
+              (when (stringp response)
+                (with-current-buffer selected-files-buffer
+                  (erase-buffer)
+                  (insert response)
+                  
+                  ;; Extract the JSON array of filenames
+                  (let (selected-files)
+                    (condition-case err
+                        (progn
+                          (goto-char (point-min))
+                          ;; Find start of JSON array
+                          (when (re-search-forward "\\[" nil t)
+                            (goto-char (match-beginning 0))
+                            (let ((json-array-type 'list))
+                              (setq selected-files (json-read)))))
+                      (error 
+                       ;; Fallback to regex for poorly formatted responses
+                       (message "Error parsing JSON response: %S - Falling back to regex" err)
+                       (goto-char (point-min))
+                       (while (re-search-forward "\"\\([^\"]+\\)\"" nil t)
+                         (push (match-string 1) selected-files))))
+                    
+                    ;; Add the selected files to context
+                    (if selected-files
+                        (let ((project-root (project-root (project-current)))
+                              (added-files 0))
+                          (dolist (filename selected-files)
+                            (let ((full-path (expand-file-name filename project-root)))
+                              (when (and (file-exists-p full-path)
+                                         (not (gptel-context--git-skip-p full-path)))
+                                (gptel-context-add-file full-path)
+                                (cl-incf added-files))))
+                          (message "Added %d files to context based on your query: %s" 
+                                   added-files 
+                                   (mapconcat #'identity selected-files ", ")))
+                      (message "No relevant files found for your query")))
+                  
+                  ;; Display the selection results
+                  (erase-buffer)
+                  (insert "## Smart Context Selection Results\n\n")
+                  (insert "**Query:** " prompt "\n\n")
+                  (insert "**Selected files:**\n")
+                  (if selected-files
+                      (dolist (file selected-files)
+                        (insert "- " file 
+                                " — " (or (gethash file descriptions) "No description") "\n"))
+                    (insert "No files selected"))
+                  (display-buffer (current-buffer))
+                  (message "Smart context selection complete"))))))
+      
+      ;; Send the request to get file recommendations
+      (message "Analyzing query to find relevant files...")
+      (gptel-request selection-prompt
+        :callback callback-fn
+        :system "You are a helpful file selection assistant. Your only task is to analyze a query and select the most relevant files from a list based on their descriptions."))))
+
 (provide 'gptel-plus)
 ;;; gptel-plus.el ends here
-
