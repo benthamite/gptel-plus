@@ -111,11 +111,10 @@ TYPE is either `buffer' or `context'.
 MODEL is the model to use for cost calculations (defaults to `gptel-model`)."
   (let ((model (or model gptel-model)))
     (when-let* ((cost-per-1m-input-tokens (get model :input-cost))
-                (tokens-per-word gptel-plus-tokens-per-word)
-                (words-context (pcase type
-                                 ('buffer (gptel-plus-count-words-in-buffer))
-                                 ('context (gptel-plus-count-words-in-context)))))
-      (* cost-per-1m-input-tokens tokens-per-word words-context))))
+                (words (pcase type
+                         ('buffer (gptel-plus-count-words-in-buffer))
+                         ('context (gptel-plus-count-words-in-context)))))
+      (* words gptel-plus-tokens-per-word cost-per-1m-input-tokens))))
 
 ;;;;;; Count words
 
