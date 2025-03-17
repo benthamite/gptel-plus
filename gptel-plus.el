@@ -199,8 +199,8 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 ;;;;;; Display costs
 
-;; This is just the original `gptel-mode' definition with a modification to add
-;; an additional cost field in the header line.
+;; This is just the original `gptel-mode' definition patched to add an
+;; additional cost field in the header line.
 (with-eval-after-load 'gptel
   (el-patch-define-minor-mode gptel-mode
     "Minor mode for interacting with LLMs."
