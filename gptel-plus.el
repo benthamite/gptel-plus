@@ -150,32 +150,48 @@ Binaries are skipped."
 	(unless (member buf initial-buffers)
 	  (kill-buffer buf))))))
 
+;;;;;; Buffer tracking
+
+(defvar gptel-plus--active-buffers nil
+  "List of buffers with `gptel-mode' enabled.")
+
+(defun gptel-plus-track-buffer ()
+  "Add current buffer to the list of active gptel buffers."
+  (when gptel-mode
+    (add-to-list 'gptel-plus--active-buffers (current-buffer))))
+
+(defun gptel-plus-untrack-buffer ()
+  "Remove current buffer from the list of active gptel buffers."
+  (setq gptel-plus--active-buffers
+        (delq (current-buffer) gptel-plus--active-buffers)))
+
+(defun gptel-plus-clean-buffer-list ()
+  "Remove killed buffers from `gptel-plus--active-buffers'."
+  (setq gptel-plus--active-buffers
+        (cl-remove-if-not #'buffer-live-p gptel-plus--active-buffers)))
+
+(add-hook 'gptel-mode-hook #'gptel-plus-track-buffer)
+(add-hook 'kill-buffer-hook #'gptel-plus-untrack-buffer)
+
 ;;;;;; Update costs
 
 (defun gptel-plus-update-all-context-costs (&rest _)
-  "Update context costs in all gptel buffers."
-  (dolist (buffer (gptel-plus-get-all-gptel-buffers))
+  "Update context costs in all gptel buffers when context is modified."
+  (gptel-plus-clean-buffer-list)
+  (dolist (buffer gptel-plus--active-buffers)
     (when (buffer-live-p buffer)
       (with-current-buffer buffer
         (setq gptel-plus--context-cost (gptel-plus-get-context-cost))))))
 
-(defun gptel-plus-get-all-gptel-buffers ()
-  "Return a list of all buffers in `gptel-mode'."
-  (let (gptel-buffers)
-    (dolist (buf (buffer-list))
-      (when (buffer-local-value 'gptel-mode buf)
-	(push buf gptel-buffers)))
-    gptel-buffers))
-
 (advice-add 'gptel-context-add-file :after #'gptel-plus-update-all-context-costs)
 (advice-add 'gptel-context-remove :after #'gptel-plus-update-all-context-costs)
 
-(defun gptel-plus-update-current-context-cost ()
-  "Update context costs in the current buffer."
+(defun gptel-plus-recalculate-context-cost ()
+  "Recalculate context cost for the current buffer's model."
   (when gptel-mode
     (setq gptel-plus--context-cost (gptel-plus-get-context-cost))))
 
-(add-hook 'gptel-mode-hook #'gptel-plus-update-current-context-cost)
+(add-hook 'gptel-mode-hook #'gptel-plus-recalculate-context-cost)
 
 (defun gptel-plus--update-cost-on-model-change (sym _ &optional _)
   "Update context cost when SYM is `gptel-model' or `gptel-backend'."
