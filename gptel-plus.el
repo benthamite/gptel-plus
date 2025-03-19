@@ -56,14 +56,15 @@ To disable warnings, set this value to nil."
   :type 'number
   :group 'gptel-plus)
 
-;;;; Functions
+
+
+
+
+(defvar gptel-plus--context-cost nil
+  "Cached cost calculation for context files.")
+
 
 ;;;;; Cost estimation
-
-;;;;;; Get costs
-
-(defvar-local gptel-plus--context-cost nil
-  "Cached cost calculation for context files, specific to current buffer's model.")
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
 (defun gptel-plus-get-total-cost ()
@@ -98,25 +99,36 @@ Note that, currently, images are not included in the cost calculation."
   (/ cost 1000000.0))
 
 (defun gptel-plus-get-context-cost ()
-  "Return cost for the current context files, using current buffer's model."
+  "Return cost for the current context files."
   (gptel-plus-get-cost-of-input-type 'context))
 
 (defun gptel-plus-get-buffer-cost ()
   "Return cost for the current buffer or region."
   (gptel-plus-get-cost-of-input-type 'buffer))
 
-(defun gptel-plus-get-cost-of-input-type (type &optional model)
+(defun gptel-plus-get-cost-of-input-type (type)
   "Get the cost of the current buffer or the context files.
-TYPE is either `buffer' or `context'.
-MODEL is the model to use for cost calculations (defaults to `gptel-model`)."
-  (let ((model (or model gptel-model)))
-    (when-let* ((cost-per-1m-input-tokens (get model :input-cost))
-                (words (pcase type
-                         ('buffer (gptel-plus-count-words-in-buffer))
-                         ('context (gptel-plus-count-words-in-context)))))
-      (* words gptel-plus-tokens-per-word cost-per-1m-input-tokens))))
+TYPE is either `buffer' or `context'."
+  (when-let* ((cost-per-1m-input-tokens (get gptel-model :input-cost))
+              (tokens-per-word gptel-plus-tokens-per-word)
+              (words-context (pcase type
+			       ('buffer (gptel-plus-count-words-in-buffer))
+			       ('context (gptel-plus-count-words-in-context)))))
+    (* cost-per-1m-input-tokens tokens-per-word words-context)))
 
-;;;;;; Count words
+(defun gptel-plus-update-context-cost (&rest _)
+  "Update the context cost when the context is modified."
+  (setq gptel-plus--context-cost (gptel-plus-get-context-cost)))
+
+(advice-add 'gptel-context-add-file :after #'gptel-plus-update-context-cost)
+(advice-add 'gptel-context-remove :after #'gptel-plus-update-context-cost)
+
+(defun gptel-plus--update-cost-on-model-change (sym _ &optional _)
+  "Update context cost when SYM is `gptel-model' or `gptel-backend'."
+  (when (memq sym '(gptel-model gptel-backend))
+    (gptel-plus-update-context-cost)))
+
+(advice-add 'gptel--set-with-scope :after #'gptel-plus--update-cost-on-model-change)
 
 ;; TODO: handle restricted
 ;; (https://github.com/karthink/gptel#limit-conversation-context-to-an-org-heading)
@@ -150,58 +162,6 @@ Binaries are skipped."
 	(unless (member buf initial-buffers)
 	  (kill-buffer buf))))))
 
-;;;;;; Buffer tracking
-
-(defvar gptel-plus--active-buffers nil
-  "List of buffers with `gptel-mode' enabled.")
-
-(defun gptel-plus-track-buffer ()
-  "Add current buffer to the list of active gptel buffers."
-  (when gptel-mode
-    (add-to-list 'gptel-plus--active-buffers (current-buffer))))
-
-(defun gptel-plus-untrack-buffer ()
-  "Remove current buffer from the list of active gptel buffers."
-  (setq gptel-plus--active-buffers
-        (delq (current-buffer) gptel-plus--active-buffers)))
-
-(defun gptel-plus-clean-buffer-list ()
-  "Remove killed buffers from `gptel-plus--active-buffers'."
-  (setq gptel-plus--active-buffers
-        (cl-remove-if-not #'buffer-live-p gptel-plus--active-buffers)))
-
-(add-hook 'gptel-mode-hook #'gptel-plus-track-buffer)
-(add-hook 'kill-buffer-hook #'gptel-plus-untrack-buffer)
-
-;;;;;; Update costs
-
-(defun gptel-plus-update-all-context-costs (&rest _)
-  "Update context costs in all gptel buffers when context is modified."
-  (gptel-plus-clean-buffer-list)
-  (dolist (buffer gptel-plus--active-buffers)
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (setq gptel-plus--context-cost (gptel-plus-get-context-cost))))))
-
-(advice-add 'gptel-context-add-file :after #'gptel-plus-update-all-context-costs)
-(advice-add 'gptel-context-remove :after #'gptel-plus-update-all-context-costs)
-
-(defun gptel-plus-recalculate-context-cost ()
-  "Recalculate context cost for the current buffer's model."
-  (when gptel-mode
-    (setq gptel-plus--context-cost (gptel-plus-get-context-cost))))
-
-(add-hook 'gptel-mode-hook #'gptel-plus-recalculate-context-cost)
-
-(defun gptel-plus--update-cost-on-model-change (sym _ &optional _)
-  "Update context cost when SYM is `gptel-model' or `gptel-backend'."
-  (when (memq sym '(gptel-model gptel-backend))
-    (setq gptel-plus--context-cost (gptel-plus-get-context-cost))))
-
-(advice-add 'gptel--set-with-scope :after #'gptel-plus--update-cost-on-model-change)
-
-;;;;;; Cost warning
-
 (defun gptel-plus-confirm-when-costs-high (&optional _)
   "Prompt user for confirmation if the cost of current prompt exceeds threshold.
 The threshold is set via `gptel-plus-cost-warning-threshold'."
@@ -214,9 +174,8 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
 
 ;;;;;; Display costs
-
-;; This is just the original `gptel-mode' definition patched to add an
-;; additional cost field in the header line.
+;; This is just the original `gptel-mode' definition with a modification to add
+;; an additional cost field in the header line.
 (with-eval-after-load 'gptel
   (el-patch-define-minor-mode gptel-mode
     "Minor mode for interacting with LLMs."
@@ -564,7 +523,7 @@ updates the cost, and then refreshes the buffer."
           ;; Remove each flagged file from the context:
           (dolist (file files-to-remove)
             (setq gptel-context--alist (assq-delete-all file gptel-context--alist)))
-          (gptel-plus-update-all-context-costs)
+          (gptel-plus-update-context-cost)
           (message "Removed flagged files from context: %s"
                    (mapconcat 'identity files-to-remove ", "))
           (gptel-plus-refresh-context-files-buffer))
