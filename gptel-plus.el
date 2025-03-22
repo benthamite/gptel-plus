@@ -56,10 +56,6 @@ To disable warnings, set this value to nil."
   :type 'number
   :group 'gptel-plus)
 
-
-
-
-
 (defvar gptel-plus--context-cost nil
   "Cached cost calculation for context files.")
 
@@ -142,19 +138,29 @@ TYPE is either `buffer' or `context'."
     (count-words (point-min) (point))))
 
 (defun gptel-plus-count-words-in-context ()
-  "Iterate over the files in context and sum the number of words in each file.
-Binaries are skipped."
+  "Iterate over the files and buffers in context and add up the word count in each.
+Binaries are skipped. Also works with buffers in context."
   (let ((revert-without-query t)
 	(initial-buffers (buffer-list)))
     (prog1
-	(cl-reduce (lambda (accum file-list)
-		     (let ((file (car file-list)))
-		       (if (gptel--file-binary-p file)
-			   accum
+	(cl-reduce (lambda (accum item)
+		     (let ((file-or-buffer (car item)))
+		       (cond
+			;; If it's a buffer
+			((bufferp file-or-buffer)
 			 (+ accum
-			    (with-temp-buffer
-			      (insert-file-contents file)
-			      (count-words (point-min) (point-max)))))))
+			    (with-current-buffer file-or-buffer
+			      (count-words (point-min) (point-max)))))
+			;; If it's a file
+			((stringp file-or-buffer)
+			 (if (gptel--file-binary-p file-or-buffer)
+			     accum
+			   (+ accum
+			      (with-temp-buffer
+				(insert-file-contents file-or-buffer)
+				(count-words (point-min) (point-max))))))
+			;; Otherwise (shouldn't happen)
+			(t accum))))
 		   gptel-context--alist
 		   :initial-value 0)
       ;; Clean up any temp buffers we created
