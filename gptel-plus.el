@@ -198,7 +198,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 	  (add-hook 'before-save-hook #'gptel--save-state nil t)
 	  (when (derived-mode-p 'org-mode)
             ;; Work around bug in `org-fontify-extend-region'.
-            (add-hook 'gptel-post-response-functions #'gptel--font-lock-update nil t))
+            (add-hook 'gptel-post-response-functions #'font-lock-flush nil t))
 	  (gptel--restore-state)
 	  (if gptel-use-header-line
 	      (setq gptel--old-header-line header-line-format
