@@ -59,7 +59,6 @@ To disable warnings, set this value to nil."
 (defvar gptel-plus--context-cost nil
   "Cached cost calculation for context files.")
 
-
 ;;;;; Cost estimation
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
