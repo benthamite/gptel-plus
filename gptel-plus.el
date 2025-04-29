@@ -175,6 +175,8 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
     (when-let ((threshold gptel-plus-cost-warning-threshold))
       (when (> cost threshold)
 	(unless (y-or-n-p (format "The cost of this prompt is $%.2f. Continue? " cost))
+	  (when (y-or-n-p "Clear context? ")
+	    (gptel-context-remove-all))
 	  (user-error "Prompt cancelled"))))))
 
 (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
