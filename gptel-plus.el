@@ -197,6 +197,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 	    (gptel-mode -1)
 	    (user-error (format "`gptel-mode' is not supported in `%s'." major-mode)))
 	  (add-hook 'before-save-hook #'gptel--save-state nil t)
+	  (gptel--prettify-preset)
 	  (when (derived-mode-p 'org-mode)
             ;; Work around bug in `org-fontify-extend-region'.
             (add-hook 'gptel-post-response-functions #'font-lock-flush nil t))
@@ -306,6 +307,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 				  (buttonize (gptel--model-name gptel-model)
 					     (lambda (&rest _) (gptel-menu))))))))
       (remove-hook 'before-save-hook #'gptel--save-state t)
+      (gptel--prettify-preset)
       (if gptel-use-header-line
 	  (setq header-line-format gptel--old-header-line
 		gptel--old-header-line nil)
