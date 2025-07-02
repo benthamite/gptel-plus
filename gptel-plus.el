@@ -66,7 +66,7 @@ To disable warnings, set this value to nil."
 (defvar gptel-plus--original-log-level nil
   "Original value of `gptel-log-level' before being temporarily changed.")
 
-;;;;; Cost estimation
+;;;;; ex ante cost estimation
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
 (defun gptel-plus-get-total-cost ()
@@ -187,7 +187,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
 
-;;;;; Exact cost calculation
+;;;;; ex post cost calculation
 
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request."
@@ -223,7 +223,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
                                          (gptel-plus-normalize-cost
                                           (+ (* input-tokens input-cost-per-1m)
                                              (* output-tokens output-cost-per-1m)))))
-                                    (message "Exact cost of last request: $%.4f" total-cost))))))))))))))))
+                                    (message "Cost of request: $%.4f" total-cost))))))))))))))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
       (setq gptel-log-level gptel-plus--original-log-level)
@@ -233,20 +233,10 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
           (kill-buffer (current-buffer))))
       (setq gptel-plus--logging-requests-count 0))))
 
-(add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
-
-(defun gptel-plus--move-cost-calculation-to-end ()
-  "Move `gptel-plus-calculate-exact-cost' to the end of `gptel-post-response-functions'.
-This ensures that the cost message is the last one displayed to the user."
-  (when (member #'gptel-plus-calculate-exact-cost gptel-post-response-functions)
-    (setq gptel-post-response-functions
-          (append (remove #'gptel-plus-calculate-exact-cost gptel-post-response-functions)
-                  (list #'gptel-plus-calculate-exact-cost)))))
-
-(add-hook 'gptel-mode-hook #'gptel-plus--move-cost-calculation-to-end)
+(add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost 100)
 
 (defun gptel-plus--with-logging (orig-fun &rest args)
-  "Advise ORIG-FUN to temporarily enable gptel logging."
+  "Advise ORIG-FUN with ARGS to temporarily enable gptel logging."
   (when (= gptel-plus--logging-requests-count 0)
     (setq gptel-plus--original-log-level gptel-log-level))
   (setq gptel-log-level 'info)
