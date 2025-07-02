@@ -43,7 +43,7 @@ If you use the [[https://github.com/progfolio/elpaca][elpaca]] package manager, 
 
 * Features
 
-** Ex ante cost estimation
+** /Ex ante/ cost estimation
 
 =gptel-plus= dynamically estimates, and displays in the header line, the approximate cost of sending a request from the current point position. This may help to make more informed decisions and to keep track of expenses when using paid LLM APIs.
 
@@ -55,23 +55,21 @@ Here’s the estimation formula:
 cost estimate = (actual word count in buffer or region + actual word count in context + assumed word count in output) × tokens per word
 #+end_src
 
-** Ex post cost estimation
-
-In addition to providing an *ex ante* cost estimate, =gptel-plus= can also calculate the *exact* cost of a request *ex post*. This is done by temporarily setting =gptel-log-level= to =info=, which prompts =gptel= to log the request and response data to the =*gptel-log*= buffer. =gptel-plus= then parses this log to extract the exact number of input and output tokens, and uses this information to calculate the precise cost of the request. The result is then displayed in the echo area.
-
 The following user options may be modified to change the relevant estimation parameters:
 
 - =gptel-plus-tokens-in-output=: Set to =250=, based on my own intuition. You can set this to any other value or, alternatively, to =gptel-max-tokens=, ensuring that the estimate will never underestimate the actual output cost.
 - =gptel-plus-tokens-per-word=: Set to =1.5=, based on a cursory Google search and advice from Claude Sonnet 3.5.
-
-(I have recently updated the value from =1.4= to =1.5= based on the following data point. One of my recent requests using the Anthropic API was rejected because it had exceeded the 200,000 token limit: the request was reported to contain roughly 205,000 tokens. In turn, the total word count in the context of my request, as computed by =gptel-plus-count-words-in-context= and =gptel-plus-count-words-in-buffer= was 135,000. This suggests a token-to-word ratio of 205,000 / 135,000 ≈ 1.52.)
 
 The package also asks the user for confirmation to proceed with a request when its cost is estimated to exceed a configurable threshold:
 
 - =gptel-plus-cost-warning-threshold=: Set to =0.15= (i.e., 15 cents), based on my personal preference.
 
 To disable the warning, set this option to =nil=.  
-  
+
+** /Ex post/ cost calculation
+
+In addition to providing an /ex ante/ cost estimate, =gptel-plus= can also calculate the actual cost of a request /ex post/. This is done by temporarily setting =gptel-log-level= to =info=, which prompts =gptel= to log the request and response data to the =*gptel-log*= buffer. =gptel-plus= then parses this log to extract the exact number of input and output tokens, and uses this information to calculate the precise cost of the request. The result is then displayed in the echo area.
+ 
 ** Context persistence
 
 =gptel-plus= allows the user to save and restore context files across sessions. The following commands are available:
