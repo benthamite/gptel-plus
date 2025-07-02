@@ -228,10 +228,8 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
       (setq gptel-log-level gptel-plus--original-log-level)
-      (when (and (null gptel-plus--original-log-level)
-                 (get-buffer "*gptel-log*"))
-        (with-current-buffer (get-buffer "*gptel-log*")
-          (kill-buffer (current-buffer))))
+      (when-let ((log-buffer (get-buffer "*gptel-log*")))
+        (kill-buffer log-buffer))
       (setq gptel-plus--logging-requests-count 0))))
 
 (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost 100)
