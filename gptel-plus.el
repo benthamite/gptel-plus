@@ -66,7 +66,7 @@ To disable warnings, set this value to nil."
 (defvar gptel-plus--original-log-level nil
   "Original value of `gptel-log-level' before being temporarily changed.")
 
-;;;;; ex ante cost estimation
+;;;;; Cost estimation
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
 (defun gptel-plus-get-total-cost ()
@@ -187,7 +187,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
 
-;;;;; ex post cost calculation
+;;;;; Exact cost calculation
 
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request."
@@ -223,7 +223,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
                                          (gptel-plus-normalize-cost
                                           (+ (* input-tokens input-cost-per-1m)
                                              (* output-tokens output-cost-per-1m)))))
-                                    (message "Cost of request: $%.4f" total-cost))))))))))))))))
+                                    (message "Exact cost of request: $%.4f" total-cost))))))))))))))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
       (setq gptel-log-level gptel-plus--original-log-level)
