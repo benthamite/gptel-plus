@@ -31,6 +31,7 @@
 (require 'gptel)
 (require 'gptel-context)
 (require 'el-patch)
+(require 'json)
 
 ;;;; User options
 
@@ -179,6 +180,48 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 	  (user-error "Prompt cancelled"))))))
 
 (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
+
+;;;;; Exact cost calculation
+
+(defun gptel-plus-calculate-exact-cost (&rest _)
+  "Calculate and report the exact cost of the last `gptel' request."
+  (when-let (log-buffer (get-buffer "*gptel-log*"))
+    (with-current-buffer log-buffer
+      (goto-char (point-max))
+      (when (re-search-backward "^{" nil t)
+        (let* ((start (point))
+               (end (save-excursion (scan-sexps start 1) (point)))
+               (json-text (buffer-substring-no-properties start end))
+               (json (json-read-from-string json-text)))
+          (when (equal (cdr (assoc 'stop_reason json)) "end_turn")
+            (let* ((usage (cdr (assoc 'usage json)))
+                   (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
+                   (output-tokens (and usage (cdr (assoc 'output_tokens usage))))
+                   (model-id (cdr (assoc 'model json)))
+                   (model-props (and model-id (gptel-plus--get-model-by-id model-id)))
+                   (input-cost-per-1m (and model-props (getf model-props :input-cost)))
+                   (output-cost-per-1m (and model-props (getf model-props :output-cost))))
+              (when (and input-tokens output-tokens input-cost-per-1m output-cost-per-1m)
+                (let ((total-cost
+                       (gptel-plus-normalize-cost
+                        (+ (* input-tokens input-cost-per-1m)
+                           (* output-tokens output-cost-per-1m)))))
+                  (message "Exact cost of last request: $%.4f" total-cost))))))))))
+
+(defun gptel-plus--get-model-by-id (id)
+  "Return model plist from `gptel-models' that matches ID."
+  (cl-find-if (lambda (model-plist)
+                (string= id (getf model-plist :name)))
+              gptel-models))
+
+(add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
+
+(defun gptel-plus--with-logging (orig-fun &rest args)
+  "Advise ORIG-FUN to temporarily enable gptel logging."
+  (let ((gptel-log-level 'info))
+    (apply orig-fun args)))
+
+(advice-add 'gptel-send :around #'gptel-plus--with-logging)
 
 ;;;;;; Display costs
 ;; This is just the original `gptel-mode' definition with a modification to add
