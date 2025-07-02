@@ -187,7 +187,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
 
-;;;;; ex post cost calculation
+;;;;; ex post cost estimation
 
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request."
