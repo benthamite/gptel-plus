@@ -235,6 +235,16 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
 
+(defun gptel-plus--move-cost-calculation-to-end ()
+  "Move `gptel-plus-calculate-exact-cost' to the end of `gptel-post-response-functions'.
+This ensures that the cost message is the last one displayed to the user."
+  (when (member #'gptel-plus-calculate-exact-cost gptel-post-response-functions)
+    (setq gptel-post-response-functions
+          (append (remove #'gptel-plus-calculate-exact-cost gptel-post-response-functions)
+                  (list #'gptel-plus-calculate-exact-cost)))))
+
+(add-hook 'gptel-mode-hook #'gptel-plus--move-cost-calculation-to-end)
+
 (defun gptel-plus--with-logging (orig-fun &rest args)
   "Advise ORIG-FUN to temporarily enable gptel logging."
   (when (= gptel-plus--logging-requests-count 0)
