@@ -60,6 +60,12 @@ To disable warnings, set this value to nil."
 (defvar gptel-plus--context-cost nil
   "Cached cost calculation for context files.")
 
+(defvar gptel-plus--logging-requests-count 0
+  "Counter for active `gptel' requests that require logging.")
+
+(defvar gptel-plus--original-log-level nil
+  "Original value of `gptel-log-level' before being temporarily changed.")
+
 ;;;;; Cost estimation
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
@@ -185,45 +191,57 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request."
-  (when-let (log-buffer (get-buffer "*gptel-log*"))
-    (with-current-buffer log-buffer
-      (goto-char (point-max))
-      ;; Find the end of the request.
-      (when (re-search-backward "^event: message_delta" nil t)
-        (let ((end-of-request-pos (point)))
-          (when (re-search-forward "^data: \\(.*\\)" nil t)
-            (let* ((json-text (match-string 1))
-                   (json (json-read-from-string json-text))
-                   (delta (cdr (assoc 'delta json))))
-              (when (and delta (equal (cdr (assoc 'stop_reason delta)) "end_turn"))
-                (let* ((usage (cdr (assoc 'usage json)))
-                       (output-tokens (and usage (cdr (assoc 'output_tokens usage)))))
-                  (goto-char end-of-request-pos)
-                  (when (and output-tokens (re-search-backward "^event: message_start" nil t))
-                    (when (re-search-forward "^data: \\(.*\\)" nil t)
-                      (let* ((json-text (match-string 1))
-                             (json (json-read-from-string json-text))
-                             (message (cdr (assoc 'message json)))
-                             (usage (cdr (assoc 'usage message)))
-                             (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
-                             (model-id (and message (cdr (assoc 'model message)))))
-                        (when (and input-tokens model-id)
-                          (let* ((model-sym (intern-soft model-id))
-                                 (input-cost-per-1m (and model-sym (get model-sym :input-cost)))
-                                 (output-cost-per-1m (and model-sym (get model-sym :output-cost))))
-                            (when (and input-cost-per-1m output-cost-per-1m)
-                              (let ((total-cost
-                                     (gptel-plus-normalize-cost
-                                      (+ (* input-tokens input-cost-per-1m)
-                                         (* output-tokens output-cost-per-1m)))))
-                                (message "Exact cost of last request: $%.4f" total-cost)))))))))))))))))
+  (unwind-protect
+      (when-let (log-buffer (get-buffer "*gptel-log*"))
+        (with-current-buffer log-buffer
+          (goto-char (point-max))
+          ;; Find the end of the request.
+          (when (re-search-backward "^event: message_delta" nil t)
+            (let ((end-of-request-pos (point)))
+              (when (re-search-forward "^data: \\(.*\\)" nil t)
+                (let* ((json-text (match-string 1))
+                       (json (json-read-from-string json-text))
+                       (delta (cdr (assoc 'delta json))))
+                  (when (and delta (equal (cdr (assoc 'stop_reason delta)) "end_turn"))
+                    (let* ((usage (cdr (assoc 'usage json)))
+                           (output-tokens (and usage (cdr (assoc 'output_tokens usage)))))
+                      (goto-char end-of-request-pos)
+                      (when (and output-tokens (re-search-backward "^event: message_start" nil t))
+                        (when (re-search-forward "^data: \\(.*\\)" nil t)
+                          (let* ((json-text (match-string 1))
+                                 (json (json-read-from-string json-text))
+                                 (message (cdr (assoc 'message json)))
+                                 (usage (cdr (assoc 'usage message)))
+                                 (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
+                                 (model-id (and message (cdr (assoc 'model message)))))
+                            (when (and input-tokens model-id)
+                              (let* ((model-sym (intern-soft model-id))
+                                     (input-cost-per-1m (and model-sym (get model-sym :input-cost)))
+                                     (output-cost-per-1m (and model-sym (get model-sym :output-cost))))
+                                (when (and input-cost-per-1m output-cost-per-1m)
+                                  (let ((total-cost
+                                         (gptel-plus-normalize-cost
+                                          (+ (* input-tokens input-cost-per-1m)
+                                             (* output-tokens output-cost-per-1m)))))
+                                    (message "Exact cost of last request: $%.4f" total-cost))))))))))))))))
+    (cl-decf gptel-plus--logging-requests-count)
+    (when (<= gptel-plus--logging-requests-count 0)
+      (setq gptel-log-level gptel-plus--original-log-level)
+      (when (and (null gptel-plus--original-log-level)
+                 (get-buffer "*gptel-log*"))
+        (with-current-buffer (get-buffer "*gptel-log*")
+          (kill-buffer (current-buffer))))
+      (setq gptel-plus--logging-requests-count 0))))
 
 (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
 
 (defun gptel-plus--with-logging (orig-fun &rest args)
   "Advise ORIG-FUN to temporarily enable gptel logging."
-  (let ((gptel-log-level 'info))
-    (apply orig-fun args)))
+  (when (= gptel-plus--logging-requests-count 0)
+    (setq gptel-plus--original-log-level gptel-log-level))
+  (setq gptel-log-level 'info)
+  (cl-incf gptel-plus--logging-requests-count)
+  (apply orig-fun args))
 
 (advice-add 'gptel-send :around #'gptel-plus--with-logging)
 
