@@ -235,15 +235,14 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost 100)
 
-(defun gptel-plus--with-logging (orig-fun &rest args)
-  "Advise ORIG-FUN with ARGS to temporarily enable gptel logging."
+(defun gptel-plus-prepare-cost-calculation ()
+  "Prepare for ex-post cost calculation by enabling logging."
   (when (= gptel-plus--logging-requests-count 0)
     (setq gptel-plus--original-log-level gptel-log-level))
   (setq gptel-log-level 'info)
-  (cl-incf gptel-plus--logging-requests-count)
-  (apply orig-fun args))
+  (cl-incf gptel-plus--logging-requests-count))
 
-(advice-add 'gptel-send :around #'gptel-plus--with-logging)
+(add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
 
 ;;;;;; Display costs
 ;; This is just the original `gptel-mode' definition with a modification to add
