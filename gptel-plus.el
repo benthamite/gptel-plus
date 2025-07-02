@@ -189,6 +189,7 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 ;;;;; ex post cost estimation
 
+;; FIXME: this only works for Anthropic. Generalize it to all major AI labs.
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request."
   (unwind-protect
