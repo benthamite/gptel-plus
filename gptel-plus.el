@@ -208,21 +208,15 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
                              (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
                              (model-id (and message (cdr (assoc 'model message)))))
                         (when (and input-tokens model-id)
-                          (let* ((model-props (gptel-plus--get-model-by-id model-id))
-                                 (input-cost-per-1m (and model-props (getf model-props :input-cost)))
-                                 (output-cost-per-1m (and model-props (getf model-props :output-cost))))
+                          (let* ((model-sym (intern-soft model-id))
+                                 (input-cost-per-1m (and model-sym (get model-sym :input-cost)))
+                                 (output-cost-per-1m (and model-sym (get model-sym :output-cost))))
                             (when (and input-cost-per-1m output-cost-per-1m)
                               (let ((total-cost
                                      (gptel-plus-normalize-cost
                                       (+ (* input-tokens input-cost-per-1m)
                                          (* output-tokens output-cost-per-1m)))))
                                 (message "Exact cost of last request: $%.4f" total-cost)))))))))))))))))
-
-(defun gptel-plus--get-model-by-id (id)
-  "Return model plist from `gptel-models' that matches ID."
-  (cl-find-if (lambda (model-plist)
-                (string= id (getf model-plist :name)))
-              gptel-models))
 
 (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
 
