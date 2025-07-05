@@ -21,7 +21,7 @@ Clone this repository to your Emacs load path and add this to your =init.el= fil
 :PROPERTIES:
 :CUSTOM_ID: with-use-pacakge
 :END:
-If you use the [[https://github.com/progfolio/elpaca][elpaca]] package manager, add this your =init.el= file:
+If you use =use-package=, add this your =init.el= file:
 
 #+begin_src emacs-lisp
 ;; with vc
