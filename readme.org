@@ -79,9 +79,9 @@ To disable this feature, set the user option =gptel-plus-calculate-cost= to =nil
 =gptel-plus= allows the user to save and restore context files across sessions. The following commands are available:
 
 - =gptel-plus-save-file-context=: Save the current context to the file.
-- =gptel-plus-restore-file-context=: Restore previously saved context.
+- =gptel-plus-restore-file-context=: Restore a previously saved context.
 
-Context is stored as file-local variables in Markdown files or as properties in Org files.
+Context is stored as file-local variables in Markdown files and as properties in Org files.
 
 ** Context file management
 
