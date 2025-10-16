@@ -270,10 +270,15 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 	  (add-hook 'before-save-hook #'gptel--save-state nil t)
 	  (add-hook 'after-change-functions 'gptel--inherit-stickiness nil t)
 	  (gptel--prettify-preset)
-	  (when (derived-mode-p 'org-mode)
+	  (cond
+           ((derived-mode-p 'org-mode)
             ;; Work around bug in `org-fontify-extend-region'.
             (add-hook 'gptel-post-response-functions #'font-lock-flush nil t))
-	  (gptel--restore-state)
+	   ((derived-mode-p 'markdown-mode)
+            (font-lock-add-keywords ;keymap is a font-lock-managed property in markdown-mode
+             nil '(("^```[ \t]*\\([[:alpha:]][^\n]*\\)?$" ;match code fences
+                    0(list 'face nil 'keymap gptel--markdown-block-map))))))
+          (gptel--restore-state)
 	  (if gptel-use-header-line
 	      (setq gptel--old-header-line header-line-format
 		    header-line-format
@@ -304,10 +309,10 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 							     "Cost of the current prompt"
 							   "There is no cost information available for this model")))))
 				   (context
-				    (and gptel-context--alist
-					 (cl-loop for entry in gptel-context--alist
-						  if (bufferp (car entry)) count it into bufs
-						  else count (stringp (car entry)) into files
+				    (and gptel-context
+					 (cl-loop for entry in gptel-context
+						  if (bufferp (or (car-safe entry) entry)) count it into bufs
+						  else count (stringp (or (car-safe entry) entry)) into files
 						  finally return
 						  (propertize
 						   (buttonize
