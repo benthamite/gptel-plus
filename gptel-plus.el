@@ -173,7 +173,7 @@ Binaries are skipped. Also works with buffers in context."
 				(count-words (point-min) (point-max))))))
 			;; Otherwise (shouldn't happen)
 			(t accum))))
-		   gptel-context--alist
+		   gptel-context
 		   :initial-value 0)
       ;; Clean up any temp buffers we created
       (dolist (buf (buffer-list))
@@ -457,19 +457,19 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
 	(pcase major-mode
 	  ('org-mode (gptel-plus-save-file-context-in-org))
 	  ('markdown-mode (gptel-plus-save-file-context-in-markdown)))
-	(message "Saved `gptel' context: %s" (prin1-to-string gptel-context--alist)))
+	(message "Saved `gptel' context: %s" (prin1-to-string gptel-context)))
     (user-error "Not in and Org or Markdown buffer")))
 
 (defun gptel-plus-save-file-context-in-org ()
   "Save the current `gptel' file context in file visited by the current Org buffer."
   (save-excursion
     (goto-char (point-min))
-    (org-set-property "GPTEL_CONTEXT" (prin1-to-string gptel-context--alist))))
+    (org-set-property "GPTEL_CONTEXT" (prin1-to-string gptel-context))))
 
 (defun gptel-plus-save-file-context-in-markdown ()
   "Save the current `gptel' file context in file visited by the current MD buffer."
   (gptel-plus-remove-local-variables-section)
-  (let ((context (format "%S" gptel-context--alist)))
+  (let ((context (format "%S" gptel-context)))
     (add-file-local-variable 'gptel-plus-context context)))
 
 (defun gptel-plus-remove-local-variables-section ()
@@ -499,7 +499,7 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
   "Restore the saved file context from the file visited by the current buffer."
   (interactive)
   (if-let ((context (gptel-plus-get-saved-context)))
-      (when (or (not gptel-context--alist)
+      (when (or (not gptel-context)
 		(y-or-n-p "Overwrite current `gptel' context? "))
 	(gptel-context-remove-all)
 	(mapc (lambda (monolist)
@@ -513,7 +513,7 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
   "List all files in the current `gptel' context sorted by size.
 Each file is shown along with its size."
   (interactive)
-  (if gptel-context--alist
+  (if gptel-context
       (with-current-buffer (get-buffer-create "*gptel context files*")
         (gptel-context-files-mode)
         (gptel-plus-list-context-files-internal)
@@ -524,7 +524,7 @@ Each file is shown along with its size."
   "Populate the current buffer with the gptel context files in a flaggable format.
 Lists key bindings dynamically based on the current mode's keymap."
   (let* ((key-bindings (gptel-context-files--describe-keybindings (current-local-map)))
-         (files (cl-remove-if-not #'stringp (mapcar #'car gptel-context--alist)))
+         (files (cl-remove-if-not #'stringp (mapcar #'car gptel-context)))
          (file-sizes (mapcar (lambda (f)
                                (cons f (file-attribute-size (file-attributes f))))
                              files))
@@ -593,7 +593,7 @@ Lists key bindings dynamically based on the current mode's keymap."
 (defun gptel-plus-remove-flagged-context-files ()
   "Remove from the gptel context all files that have been flagged in this buffer.
 This command scans the buffer for file entries where the marker property
-`gptel-flag' is non-nil, removes those files from `gptel-context--alist’,
+`gptel-flag' is non-nil, removes those files from `gptel-context’,
 updates the cost, and then refreshes the buffer."
   (interactive)
   (let (files-to-remove)
@@ -609,7 +609,7 @@ updates the cost, and then refreshes the buffer."
         (progn
           ;; Remove each flagged file from the context:
           (dolist (file files-to-remove)
-            (setq gptel-context--alist (assq-delete-all file gptel-context--alist)))
+            (setq gptel-context (assq-delete-all file gptel-context)))
           (gptel-plus-update-context-cost)
           (message "Removed flagged files from context: %s"
                    (mapconcat 'identity files-to-remove ", "))
