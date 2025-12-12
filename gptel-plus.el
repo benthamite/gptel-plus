@@ -5,7 +5,7 @@
 ;; Author: Pablo Stafforini
 ;; URL: https://github.com/benthamite/gptel-plus
 ;; Version: 0.1
-;; Package-Requires: ((el-patch "3.1") (gptel "0.7.1"))
+;; Package-Requires: ((gptel "0.7.1"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -252,144 +252,98 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
 
 ;;;;;; Display costs
-;; This is just the original `gptel-mode' definition with a modification to add
-;; an additional cost field in the header line.
-(with-eval-after-load 'gptel
-  (el-patch-define-minor-mode gptel-mode
-    "Minor mode for interacting with LLMs."
-    :lighter " GPT"
-    :keymap
-    (let ((map (make-sparse-keymap)))
-      (define-key map (kbd "C-c RET") #'gptel-send)
-      map)
-    (if gptel-mode
-	(progn
-	  (unless (derived-mode-p 'org-mode 'markdown-mode 'text-mode)
-	    (gptel-mode -1)
-	    (user-error (format "`gptel-mode' is not supported in `%s'." major-mode)))
-	  (add-hook 'before-save-hook #'gptel--save-state nil t)
-	  (add-hook 'after-change-functions 'gptel--inherit-stickiness nil t)
-	  (gptel--prettify-preset)
-	  (cond
-           ((derived-mode-p 'org-mode)
-            ;; Work around bug in `org-fontify-extend-region'.
-            (add-hook 'gptel-post-response-functions #'font-lock-flush nil t))
-	   ((derived-mode-p 'markdown-mode)
-            (font-lock-add-keywords ;keymap is a font-lock-managed property in markdown-mode
-             nil '(("^```[ \t]*\\([[:alpha:]][^\n]*\\)?$" ;match code fences
-                    0(list 'face nil 'keymap gptel--markdown-block-map))))))
-          (gptel--restore-state)
-	  (if gptel-use-header-line
-	      (setq gptel--old-header-line header-line-format
-		    header-line-format
-		    (list '(:eval (concat (propertize " " 'display '(space :align-to 0))
-					  (format "%s" (gptel-backend-name gptel-backend))))
-			  (propertize " Ready" 'face 'success)
-			  '(:eval
-			    (let* ((model (gptel--model-name gptel-model))
-				   (system
-				    (propertize
-				     (buttonize
-				      (format "[Prompt: %s]"
-					      (or (car-safe (rassoc gptel--system-message gptel-directives))
-						  (gptel--describe-directive gptel--system-message 15)))
-				      (lambda (&rest _) (gptel-system-prompt)))
-				     'mouse-face 'highlight
-				     'help-echo "System message for session"))
-				   (el-patch-add
-				     (cost (let* ((cost (gptel-plus-get-total-cost))
-						  (cost-msg (if cost
-								(format "[Cost: $%.2f]" cost)
-							      "[Cost: N/A]")))
-					     (propertize
-					      (buttonize cost-msg
-							 (lambda (&rest _) (gptel-menu)))
-					      'mouse-face 'highlight
-					      'help-echo (if cost
-							     "Cost of the current prompt"
-							   "There is no cost information available for this model")))))
-				   (context
-				    (and gptel-context
-					 (cl-loop for entry in gptel-context
-						  if (bufferp (or (car-safe entry) entry)) count it into bufs
-						  else count (stringp (or (car-safe entry) entry)) into files
-						  finally return
-						  (propertize
-						   (buttonize
-						    (concat "[Context: "
-							    (and (> bufs 0) (format "%d buf" bufs))
-							    (and (> bufs 1) "s")
-							    (and (> bufs 0) (> files 0) ", ")
-							    (and (> files 0) (format "%d file" files))
-							    (and (> files 1) "s")
-							    "]")
-						    (lambda (&rest _)
-						      (require 'gptel-context)
-						      (gptel-context--buffer-setup)))
-						   'mouse-face 'highlight
-						   'help-echo "Active gptel context"))))
-				   (toggle-track-media
-				    (lambda (&rest _)
-				      (setq-local gptel-track-media
-						  (not gptel-track-media))
-				      (if gptel-track-media
-					  (message
-					   (concat
-					    "Sending media from included links.  To include media, create "
-					    "a \"standalone\" link in a paragraph by itself, separated from surrounding text."))
-					(message "Ignoring image links.  Only link text will be sent."))
-				      (run-at-time 0 nil #'force-mode-line-update)))
-				   (track-media
-				    (and (gptel--model-capable-p 'media)
-					 (if gptel-track-media
-					     (propertize
-					      (buttonize "[Sending media]" toggle-track-media)
-					      'mouse-face 'highlight
-					      'help-echo
-					      "Sending media from standalone links/urls when supported.\nClick to toggle")
-					   (propertize
-					    (buttonize "[Ignoring media]" toggle-track-media)
-					    'mouse-face 'highlight
-					    'help-echo
-					    "Ignoring images from standalone links/urls.\nClick to toggle"))))
-				   (toggle-tools (lambda (&rest _) (interactive)
-						   (run-at-time 0 nil
-								(lambda () (call-interactively #'gptel-tools)))))
-				   (tools (when (and gptel-use-tools gptel-tools)
-					    (propertize
-					     (buttonize (pcase (length gptel-tools)
-							  (0 "[No tools]") (1 "[1 tool]")
-							  (len (format "[%d tools]" len)))
-							toggle-tools)
-					     'mouse-face 'highlight
-					     'help-echo "Select tools"))))
-			      (concat
-			       (propertize
-				" " 'display
-				`(space :align-to (- right
-						     ,(+ 5 (length model) (length system)
-							 (length track-media) (length context)
-							 (el-patch-add (length cost))
-							 (length tools)))))
-			       tools (and track-media " ") track-media (and context " ") context " "
-			       (el-patch-add cost " ")
-			       system " "
-			       (propertize
-				(buttonize (concat "[" model "]")
-					   (lambda (&rest _) (gptel-menu)))
-				'mouse-face 'highlight
-				'help-echo "Model in use"))))))
-	    (setq mode-line-process
-		  '(:eval (concat " "
-				  (buttonize (gptel--model-name gptel-model)
-					     (lambda (&rest _) (gptel-menu))))))))
-      (remove-hook 'before-save-hook #'gptel--save-state t)
-      (remove-hook 'after-change-functions 'gptel--inherit-stickiness t)
-      (gptel--prettify-preset)
-      (if gptel-use-header-line
-	  (setq header-line-format gptel--old-header-line
-		gptel--old-header-line nil)
-	(setq mode-line-process nil)))))
+
+(defvar gptel--header-line-info
+  '(:eval
+    (let* ((model (gptel--model-name gptel-model))
+           (system
+            (propertize
+             (buttonize
+              (format "[Prompt: %s]"
+                      (or (car-safe (rassoc gptel--system-message gptel-directives))
+                          (gptel--describe-directive gptel--system-message 15)))
+              (lambda (&rest _) (gptel-system-prompt)))
+             'mouse-face 'highlight
+             'help-echo "System message for session"))
+	   (cost (let* ((cost (gptel-plus-get-total-cost))
+			(cost-msg (if cost
+				      (format "[Cost: $%.2f]" cost)
+				    "[Cost: N/A]")))
+		   (propertize
+		    (buttonize cost-msg
+			       (lambda (&rest _) (gptel-menu)))
+		    'mouse-face 'highlight
+		    'help-echo (if cost
+				   "Cost of the current prompt"
+				 "There is no cost information available for this model"))))
+           (context
+            (and gptel-context
+                 (cl-loop
+                  for entry in gptel-context
+                  if (bufferp (or (car-safe entry) entry)) count it into bufs
+                  else count (stringp (or (car-safe entry) entry)) into files
+                  finally return
+                  (propertize
+                   (buttonize
+                    (concat "[Context: "
+                            (and (> bufs 0) (format "%d buf" bufs))
+                            (and (> bufs 1) "s")
+                            (and (> bufs 0) (> files 0) ", ")
+                            (and (> files 0) (format "%d file" files))
+                            (and (> files 1) "s")
+                            "]")
+                    (lambda (&rest _)
+                      (require 'gptel-context)
+                      (gptel-context--buffer-setup)))
+                   'mouse-face 'highlight
+                   'help-echo "Active gptel context"))))
+           (toggle-track-media
+            (lambda (&rest _)
+              (setq-local gptel-track-media (not gptel-track-media))
+              (if gptel-track-media
+                  (progn
+                    (run-hooks 'gptel-refresh-buffer-hook)
+                    (message "Sending media from included links."))
+                (without-restriction (gptel--annotate-link-clear))
+                (message "Ignoring links.  Only link text will be sent."))
+              (run-at-time 0 nil #'force-mode-line-update)))
+           (track-media
+            (and (gptel--model-capable-p 'media)
+                 (if gptel-track-media
+                     (propertize
+                      (buttonize "[Sending media]" toggle-track-media)
+                      'mouse-face 'highlight
+                      'help-echo
+                      "Sending media from links/urls when supported.\nClick to toggle")
+                   (propertize
+                    (buttonize "[Ignoring media]" toggle-track-media)
+                    'mouse-face 'highlight
+                    'help-echo
+                    "Ignoring media from links/urls.\nClick to toggle"))))
+           (toggle-tools (lambda (&rest _) (interactive)
+                           (run-at-time 0 nil
+                                        (lambda () (call-interactively #'gptel-tools)))))
+           (tools (when (and gptel-use-tools gptel-tools)
+                    (propertize
+                     (buttonize (pcase (length gptel-tools)
+                                  (0 "[No tools]") (1 "[1 tool]")
+                                  (len (format "[%d tools]" len)))
+                                toggle-tools)
+                     'mouse-face 'highlight
+                     'help-echo "Select tools"))))
+      (concat
+       (propertize
+        " " 'display
+        `(space :align-to (- right
+                             ,(+ 5 (length model) (length system)
+                                 (length track-media) (length context) (length cost) (length tools)))))
+       tools (and track-media " ") track-media (and context " ") context " " cost " " system " "
+       (propertize
+        (buttonize (concat "[" model "]")
+                   (lambda (&rest _) (gptel-menu)))
+        'mouse-face 'highlight
+        'help-echo "Model in use"))))
+  "Information segment for the header-line in gptel-mode.")
 
 ;;;;; Automatic mode activation
 
