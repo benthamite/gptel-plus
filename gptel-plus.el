@@ -30,7 +30,6 @@
 
 (require 'gptel)
 (require 'gptel-context)
-(require 'el-patch)
 (require 'json)
 
 ;;;; User options
