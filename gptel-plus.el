@@ -5,7 +5,7 @@
 ;; Author: Pablo Stafforini
 ;; URL: https://github.com/benthamite/gptel-plus
 ;; Version: 0.1
-;; Package-Requires: ((gptel "0.7.1"))
+;; Package-Requires: ((emacs "29.1") (gptel "0.7.1"))
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -28,6 +28,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'gptel)
 (require 'gptel-context)
 (require 'json)
@@ -53,7 +54,7 @@ Used to estimate output costs."
 (defcustom gptel-plus-cost-warning-threshold 0.15
   "The cost threshold above which to display a warning before sending a prompt.
 To disable warnings, set this value to nil."
-  :type 'number
+  :type '(choice number (const :tag "Disabled" nil))
   :group 'gptel-plus)
 
 (defcustom gptel-plus-calculate-cost t
@@ -86,8 +87,8 @@ change this default, customize `gptel-plus-tokens-in-output'.)
 
 Note that, currently, images are not included in the cost calculation."
   (when gptel-plus-calculate-cost
-    (when-let ((input-cost (gptel-plus-get-input-cost))
-               (output-cost (gptel-plus-get-output-cost)))
+    (when-let* ((input-cost (gptel-plus-get-input-cost))
+                (output-cost (gptel-plus-get-output-cost)))
       (gptel-plus-normalize-cost (+ input-cost output-cost)))))
 
 (defun gptel-plus-get-input-cost ()
@@ -151,39 +152,35 @@ TYPE is either `buffer' or `context'."
 (defun gptel-plus-count-words-in-context ()
   "Iterate over the files and buffers in context and add up the word count in each.
 Binaries are skipped. Also works with buffers in context."
-  (let ((revert-without-query t)
-	(initial-buffers (buffer-list)))
-    (prog1
-	(cl-reduce (lambda (accum item)
-		     (let ((file-or-buffer (car item)))
-		       (cond
-			;; If it's a buffer
-			((bufferp file-or-buffer)
-			 (+ accum
-			    (with-current-buffer file-or-buffer
-			      (count-words (point-min) (point-max)))))
-			;; If it's a file
-			((stringp file-or-buffer)
-			 (if (gptel--file-binary-p file-or-buffer)
-			     accum
-			   (+ accum
-			      (with-temp-buffer
-				(insert-file-contents file-or-buffer)
-				(count-words (point-min) (point-max))))))
-			;; Otherwise (shouldn't happen)
-			(t accum))))
-		   gptel-context
-		   :initial-value 0)
-      ;; Clean up any temp buffers we created
-      (dolist (buf (buffer-list))
-	(unless (member buf initial-buffers)
-	  (kill-buffer buf))))))
+  (cl-reduce (lambda (accum item)
+	       (let ((file-or-buffer (car item)))
+		 (cond
+		  ;; If it's a buffer
+		  ((bufferp file-or-buffer)
+		   (if (buffer-live-p file-or-buffer)
+		       (+ accum
+			  (with-current-buffer file-or-buffer
+			    (count-words (point-min) (point-max))))
+		     accum))
+		  ;; If it's a file
+		  ((stringp file-or-buffer)
+		   (if (or (not (file-readable-p file-or-buffer))
+			   (gptel--file-binary-p file-or-buffer))
+		       accum
+		     (+ accum
+			(with-temp-buffer
+			  (insert-file-contents file-or-buffer)
+			  (count-words (point-min) (point-max))))))
+		  ;; Otherwise (shouldn't happen)
+		  (t accum))))
+	     gptel-context
+	     :initial-value 0))
 
 (defun gptel-plus-confirm-when-costs-high (&optional _)
   "Prompt user for confirmation if the cost of current prompt exceeds threshold.
 The threshold is set via `gptel-plus-cost-warning-threshold'."
   (let ((cost (gptel-plus-get-total-cost)))
-    (when-let ((threshold gptel-plus-cost-warning-threshold))
+    (when-let* ((threshold gptel-plus-cost-warning-threshold))
       (when (and cost (> cost threshold))
 	(unless (y-or-n-p (format "The cost of this prompt is $%.2f. Continue? " cost))
 	  (when (y-or-n-p "Clear context? ")
@@ -199,42 +196,44 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
   "Calculate and report the exact cost of the last `gptel' request."
   (unwind-protect
       (when gptel-plus-calculate-cost
-        (when-let (log-buffer (get-buffer "*gptel-log*"))
-          (with-current-buffer log-buffer
-            (goto-char (point-max))
-            ;; Find the end of the request.
-            (when (re-search-backward "^event: message_delta" nil t)
-              (let ((end-of-request-pos (point)))
-                (when (re-search-forward "^data: \\(.*\\)" nil t)
-                  (let* ((json-text (match-string 1))
-                         (json (json-read-from-string json-text))
-                         (delta (cdr (assoc 'delta json))))
-                    (when (and delta (equal (cdr (assoc 'stop_reason delta)) "end_turn"))
-                      (let* ((usage (cdr (assoc 'usage json)))
-                             (output-tokens (and usage (cdr (assoc 'output_tokens usage)))))
-                        (goto-char end-of-request-pos)
-                        (when (and output-tokens (re-search-backward "^event: message_start" nil t))
-                          (when (re-search-forward "^data: \\(.*\\)" nil t)
-                            (let* ((json-text (match-string 1))
-                                   (json (json-read-from-string json-text))
-                                   (message (cdr (assoc 'message json)))
-                                   (usage (cdr (assoc 'usage message)))
-                                   (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
-                                   (model-id (and message (cdr (assoc 'model message)))))
-                              (when (and input-tokens model-id)
-                                (let* ((model-sym (intern-soft model-id))
-                                       (input-cost-per-1m (and model-sym (get model-sym :input-cost)))
-                                       (output-cost-per-1m (and model-sym (get model-sym :output-cost))))
-                                  (when (and input-cost-per-1m output-cost-per-1m)
-                                    (let ((total-cost
-                                           (gptel-plus-normalize-cost
-                                            (+ (* input-tokens input-cost-per-1m)
-                                               (* output-tokens output-cost-per-1m)))))
-                                      (message "Cost of request: $%.4f" total-cost)))))))))))))))))
+        (condition-case err
+            (when-let* ((log-buffer (get-buffer "*gptel-log*")))
+              (with-current-buffer log-buffer
+                (goto-char (point-max))
+                ;; Find the end of the request.
+                (when (re-search-backward "^event: message_delta" nil t)
+                  (let ((end-of-request-pos (point)))
+                    (when (re-search-forward "^data: \\(.*\\)" nil t)
+                      (let* ((json-text (match-string 1))
+                             (json (json-read-from-string json-text))
+                             (delta (cdr (assoc 'delta json))))
+                        (when (and delta (equal (cdr (assoc 'stop_reason delta)) "end_turn"))
+                          (let* ((usage (cdr (assoc 'usage json)))
+                                 (output-tokens (and usage (cdr (assoc 'output_tokens usage)))))
+                            (goto-char end-of-request-pos)
+                            (when (and output-tokens (re-search-backward "^event: message_start" nil t))
+                              (when (re-search-forward "^data: \\(.*\\)" nil t)
+                                (let* ((json-text (match-string 1))
+                                       (json (json-read-from-string json-text))
+                                       (message (cdr (assoc 'message json)))
+                                       (usage (cdr (assoc 'usage message)))
+                                       (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
+                                       (model-id (and message (cdr (assoc 'model message)))))
+                                  (when (and input-tokens model-id)
+                                    (let* ((model-sym (intern-soft model-id))
+                                           (input-cost-per-1m (and model-sym (get model-sym :input-cost)))
+                                           (output-cost-per-1m (and model-sym (get model-sym :output-cost))))
+                                      (when (and input-cost-per-1m output-cost-per-1m)
+                                        (let ((total-cost
+                                               (gptel-plus-normalize-cost
+                                                (+ (* input-tokens input-cost-per-1m)
+                                                   (* output-tokens output-cost-per-1m)))))
+                                          (message "Cost of request: $%.4f" total-cost))))))))))))))))
+          (error (message "gptel-plus: failed to calculate cost: %s" (error-message-string err)))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
       (setq gptel-log-level gptel-plus--original-log-level)
-      (when-let ((log-buffer (get-buffer "*gptel-log*")))
+      (when-let* ((log-buffer (get-buffer "*gptel-log*")))
         (kill-buffer log-buffer))
       (setq gptel-plus--logging-requests-count 0))))
 
@@ -367,16 +366,16 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 (declare-function breadcrumb-mode "breadcrumb")
 (defun gptel-plus-enable-gptel-common ()
-  "Enable `gptel-mode' and in any buffer with `gptel' data."
-  (let ((buffer-modified-p (buffer-modified-p)))
+  "Enable `gptel-mode' in any buffer with `gptel' data."
+  (let ((was-modified (buffer-modified-p)))
     (gptel-mode)
     ;; `breadcrumb-mode' interferes with the `gptel' header line
     (when (bound-and-true-p breadcrumb-mode)
       (breadcrumb-mode -1))
-    ;; prevent the buffer from becoming modified merely because `gptel-mode'
-    ;; is enabled
-    (unless buffer-modified-p
-      (save-buffer))))
+    ;; Prevent the buffer from becoming modified merely because `gptel-mode'
+    ;; is enabled.
+    (unless was-modified
+      (set-buffer-modified-p nil))))
 
 (defun gptel-plus-file-has-gptel-local-variable-p ()
   "Return t iff the current buffer has a `gptel' local variable."
@@ -410,7 +409,7 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
 	  ('org-mode (gptel-plus-save-file-context-in-org))
 	  ('markdown-mode (gptel-plus-save-file-context-in-markdown)))
 	(message "Saved `gptel' context: %s" (prin1-to-string gptel-context)))
-    (user-error "Not in and Org or Markdown buffer")))
+    (user-error "Not in an Org or Markdown buffer")))
 
 (defun gptel-plus-save-file-context-in-org ()
   "Save the current `gptel' file context in file visited by the current Org buffer."
@@ -436,27 +435,44 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
 
 ;;;;;; Get saved
 
+(defun gptel-plus--safe-read (str)
+  "Read an Elisp object from STR, rejecting dangerous reader macros.
+Signals an error if STR contains the `#.' reader macro, which would
+cause arbitrary code execution at read time."
+  (when (string-match-p "#\\." str)
+    (error "Refusing to read data containing `#.' reader macro"))
+  (car (read-from-string str)))
+
 (defun gptel-plus-get-saved-context ()
   "Get the saved `gptel' context from the file visited by the current buffer."
   (pcase major-mode
     ('org-mode
      (when-let* ((gptel-context-prop (org-entry-get (point-min) "GPTEL_CONTEXT")))
-       (read gptel-context-prop)))
-    ('markdown-mode gptel-plus-context)
-    (_ (user-error "Not in and Org or Markdown buffer"))))
+       (gptel-plus--safe-read gptel-context-prop)))
+    ('markdown-mode
+     (when (stringp gptel-plus-context)
+       (gptel-plus--safe-read gptel-plus-context)))
+    (_ (user-error "Not in an Org or Markdown buffer"))))
 
 ;;;;;; Restore
 
 (defun gptel-plus-restore-file-context ()
   "Restore the saved file context from the file visited by the current buffer."
   (interactive)
-  (if-let ((context (gptel-plus-get-saved-context)))
+  (if-let* ((context (gptel-plus-get-saved-context)))
       (when (or (not gptel-context)
 		(y-or-n-p "Overwrite current `gptel' context? "))
 	(gptel-context-remove-all)
-	(mapc (lambda (monolist)
-		(gptel-context-add-file (car monolist)))
-	      context))
+	(let (missing)
+	  (dolist (entry context)
+	    (let ((file (car entry)))
+	      (if (and (stringp file) (file-readable-p file))
+		  (gptel-context-add-file file)
+		(push file missing))))
+	  (when missing
+	    (message "Skipped %d missing file(s): %s"
+		     (length missing)
+		     (mapconcat #'identity missing ", ")))))
     (message "No saved `gptel' context found.")))
 
 ;;;;; Context management
@@ -475,10 +491,10 @@ Each file is shown along with its size."
 (defun gptel-plus-list-context-files-internal ()
   "Populate the current buffer with the gptel context files in a flaggable format.
 Lists key bindings dynamically based on the current mode's keymap."
-  (let* ((key-bindings (gptel-context-files--describe-keybindings (current-local-map)))
+  (let* ((key-bindings (gptel-plus--describe-keybindings (current-local-map)))
          (files (cl-remove-if-not #'stringp (mapcar #'car gptel-context)))
          (file-sizes (mapcar (lambda (f)
-                               (cons f (file-attribute-size (file-attributes f))))
+                               (cons f (or (file-attribute-size (file-attributes f)) 0)))
                              files))
          (sorted-files (sort file-sizes (lambda (a b) (> (cdr a) (cdr b)))))
          (home-dir (expand-file-name "~/")))
@@ -511,7 +527,7 @@ Lists key bindings dynamically based on the current mode's keymap."
      map))
   (read-only-mode 1))
 
-(defun gptel-context-files--describe-keybindings (keymap)
+(defun gptel-plus--describe-keybindings (keymap)
   "Return a string description of KEYMAP's bindings in the format: key = command."
   (let ((bindings '()))
     (map-keymap
@@ -524,13 +540,13 @@ Lists key bindings dynamically based on the current mode's keymap."
                           (prin1-to-string binding))))
            (push (format "%s = %s" key-str cmd-str) bindings))))
      keymap)
-    (mapconcat 'identity (sort bindings 'string<) "\n")))
+    (mapconcat #'identity (sort bindings #'string<) "\n")))
 
 (defun gptel-plus-toggle-mark ()
   "Toggle the mark on the current line’s file entry and move to the next entry."
   (interactive)
   (let ((line-start (line-beginning-position)))
-    (when-let ((file (get-text-property line-start 'gptel-context-file)))
+    (when-let* ((file (get-text-property line-start 'gptel-context-file)))
       (let* ((current-flag (get-text-property line-start 'gptel-flag))
              (new-flag (not current-flag))
              (new-marker (if new-flag "[X]" "[ ]")))
@@ -545,33 +561,37 @@ Lists key bindings dynamically based on the current mode's keymap."
 (defun gptel-plus-remove-flagged-context-files ()
   "Remove from the gptel context all files that have been flagged in this buffer.
 This command scans the buffer for file entries where the marker property
-`gptel-flag' is non-nil, removes those files from `gptel-context’,
+`gptel-flag’ is non-nil, removes those files from `gptel-context’,
 updates the cost, and then refreshes the buffer."
   (interactive)
   (let (files-to-remove)
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
-        (when (and (get-text-property (line-beginning-position) 'gptel-context-file)
-                   (get-text-property (line-beginning-position) 'gptel-flag))
-          (push (get-text-property (line-beginning-position) 'gptel-context-file)
+        (when (and (get-text-property (line-beginning-position) ‘gptel-context-file)
+                   (get-text-property (line-beginning-position) ‘gptel-flag))
+          (push (get-text-property (line-beginning-position) ‘gptel-context-file)
                 files-to-remove))
         (forward-line 1)))
     (if files-to-remove
         (progn
-          ;; Remove each flagged file from the context:
+          ;; Remove each flagged file from the context.  Use `cl-delete’
+          ;; with `equal’ instead of `assq-delete-all’, because the keys
+          ;; are strings (file paths) and `assq-delete-all’ uses `eq’.
           (dolist (file files-to-remove)
-            (setq gptel-context (assq-delete-all file gptel-context)))
+            (setq gptel-context
+                  (cl-delete file gptel-context
+                             :key #’car :test #’equal)))
           (gptel-plus-update-context-cost)
           (message "Removed flagged files from context: %s"
-                   (mapconcat 'identity files-to-remove ", "))
+                   (mapconcat #’identity files-to-remove ", "))
           (gptel-plus-refresh-context-files-buffer))
       (message "No files flagged for removal."))))
 
 (defun gptel-plus-refresh-context-files-buffer ()
   "Refresh the buffer showing the gptel context-files list."
   (interactive)
-  (when-let ((buf (get-buffer "*gptel context files*")))
+  (when-let* ((buf (get-buffer "*gptel context files*")))
     (with-current-buffer buf
       (gptel-plus-list-context-files-internal)
       (message "Context file listing refreshed."))))
