@@ -19,6 +19,8 @@ This manual describes the features and customization options for the Emacs Lisp 
 
 =gptel-plus.el= extends [[https://github.com/karthink/gptel][gptel]], the Emacs package for interfacing with large language models.  It adds cost awareness, context persistence, and quality-of-life improvements that are useful when working with paid LLM APIs on a regular basis.
 
+The development repository is on [[https://github.com/benthamite/gptel-plus][GitHub]].
+
 The package provides four groups of functionality:
 
 - *Cost estimation and tracking.*  Before sending a request, =gptel-plus= estimates its cost and displays it in the header line.  After a request completes, it parses the response log to report the exact cost.  When a request exceeds a configurable cost threshold, it asks for confirmation before proceeding ([[#h:cost-estimation][Cost estimation]]).

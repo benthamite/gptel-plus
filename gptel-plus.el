@@ -543,7 +543,7 @@ Lists key bindings dynamically based on the current mode's keymap."
     (mapconcat #'identity (sort bindings #'string<) "\n")))
 
 (defun gptel-plus-toggle-mark ()
-  "Toggle the mark on the current line’s file entry and move to the next entry."
+  "Toggle the mark on the current line's file entry and move to the next entry."
   (interactive)
   (let ((line-start (line-beginning-position)))
     (when-let* ((file (get-text-property line-start 'gptel-context-file)))
@@ -561,30 +561,30 @@ Lists key bindings dynamically based on the current mode's keymap."
 (defun gptel-plus-remove-flagged-context-files ()
   "Remove from the gptel context all files that have been flagged in this buffer.
 This command scans the buffer for file entries where the marker property
-`gptel-flag’ is non-nil, removes those files from `gptel-context’,
+`gptel-flag' is non-nil, removes those files from `gptel-context',
 updates the cost, and then refreshes the buffer."
   (interactive)
   (let (files-to-remove)
     (save-excursion
       (goto-char (point-min))
       (while (not (eobp))
-        (when (and (get-text-property (line-beginning-position) ‘gptel-context-file)
-                   (get-text-property (line-beginning-position) ‘gptel-flag))
-          (push (get-text-property (line-beginning-position) ‘gptel-context-file)
+        (when (and (get-text-property (line-beginning-position) 'gptel-context-file)
+                   (get-text-property (line-beginning-position) 'gptel-flag))
+          (push (get-text-property (line-beginning-position) 'gptel-context-file)
                 files-to-remove))
         (forward-line 1)))
     (if files-to-remove
         (progn
-          ;; Remove each flagged file from the context.  Use `cl-delete’
-          ;; with `equal’ instead of `assq-delete-all’, because the keys
-          ;; are strings (file paths) and `assq-delete-all’ uses `eq’.
+          ;; Remove each flagged file from the context.  Use `cl-delete'
+          ;; with `equal' instead of `assq-delete-all', because the keys
+          ;; are strings (file paths) and `assq-delete-all' uses `eq'.
           (dolist (file files-to-remove)
             (setq gptel-context
                   (cl-delete file gptel-context
-                             :key #’car :test #’equal)))
+                             :key #'car :test #'equal)))
           (gptel-plus-update-context-cost)
           (message "Removed flagged files from context: %s"
-                   (mapconcat #’identity files-to-remove ", "))
+                   (mapconcat #'identity files-to-remove ", "))
           (gptel-plus-refresh-context-files-buffer))
       (message "No files flagged for removal."))))
 

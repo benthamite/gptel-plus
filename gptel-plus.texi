@@ -1,0 +1,388 @@
+\input texinfo    @c -*- texinfo -*-
+@c %**start of header
+@setfilename gptel-plus.info
+@settitle gptel-plus: Enhancements for gptel
+@documentencoding UTF-8
+@documentlanguage en
+@c %**end of header
+
+@dircategory Emacs misc features
+@direntry
+* gptel-plus: (gptel-plus). Enhancements for gptel.
+@end direntry
+
+@finalout
+@titlepage
+@title gptel-plus: Enhancements for gptel
+@author Pablo Stafforini (@email{pablo@@stafforini.com})
+@end titlepage
+
+@contents
+
+@ifnottex
+@node Top
+@top gptel-plus: Enhancements for gptel
+
+This manual describes the features and customization options for the Emacs Lisp file @samp{gptel-plus.el}.
+
+@end ifnottex
+
+@menu
+* Overview::
+* Installation::
+* User options::
+* Commands::
+* Functions::
+* Troubleshooting::
+* Indices::
+
+@detailmenu
+--- The Detailed Node Listing ---
+
+Installation
+
+* Manual installation::
+* Installation with use-package::
+
+User options
+
+* Cost estimation parameters::
+
+Commands
+
+* Cost estimation::
+* Context persistence::
+* Context file management::
+* Automatic mode activation::
+
+Cost estimation
+
+* Header line display::
+* Ex post cost calculation::
+* Cost warning::
+
+Functions
+
+* Cost computation::
+* Word counting::
+* Context detection::
+
+Troubleshooting
+
+* Cost shows ``N/A''::
+* Ex post cost not reported::
+* Context restore skips files::
+
+Indices
+
+* Function index::
+* Variable index::
+
+@end detailmenu
+@end menu
+
+@node Overview
+@chapter Overview
+
+@samp{gptel-plus.el} extends @uref{https://github.com/karthink/gptel, gptel}, the Emacs package for interfacing with large language models.  It adds cost awareness, context persistence, and quality-of-life improvements that are useful when working with paid LLM APIs on a regular basis.
+
+The development repository is on @uref{https://github.com/benthamite/gptel-plus, GitHub}.
+
+The package provides four groups of functionality:
+
+@itemize
+@item
+@strong{Cost estimation and tracking.}  Before sending a request, @samp{gptel-plus} estimates its cost and displays it in the header line.  After a request completes, it parses the response log to report the exact cost.  When a request exceeds a configurable cost threshold, it asks for confirmation before proceeding (@ref{Cost estimation}).
+
+@item
+@strong{Context persistence.}  The gptel context (files added via @code{gptel-context-add-file}) is ephemeral by default: it is lost when you kill the buffer.  @samp{gptel-plus} can save and restore context to and from the file itself, as an Org property or a Markdown file-local variable (@ref{Context persistence}).
+
+@item
+@strong{Context file management.}  A dedicated buffer lists all context files sorted by size, with a dired-like interface for flagging and removing files in bulk.  This is especially helpful when you need to trim a large context to reduce costs (@ref{Context file management}).
+
+@item
+@strong{Automatic mode activation.}  @samp{gptel-plus} can automatically enable @code{gptel-mode} when you open a file that contains gptel data, so that you can resume a conversation without manually toggling the mode (@ref{Automatic mode activation}).
+@end itemize
+
+The package requires Emacs 29.1 or later and @samp{gptel} 0.7.1 or later.
+
+@node Installation
+@chapter Installation
+
+@menu
+* Manual installation::
+* Installation with use-package::
+@end menu
+
+@node Manual installation
+@section Manual installation
+
+Clone the repository somewhere on your @code{load-path} and load the package:
+
+@lisp
+(require 'gptel-plus)
+@end lisp
+
+@node Installation with use-package
+@section Installation with use-package
+
+The following snippets show how to install @samp{gptel-plus} with the most common package managers.  Choose whichever one matches your setup.
+
+@lisp
+;; with vc (built-in, Emacs 29+)
+(use-package gptel-plus
+  :vc (:url "https://github.com/benthamite/gptel-plus"))
+
+;; with elpaca
+(use-package gptel-plus
+  :ensure (:host github :repo "benthamite/gptel-plus"))
+
+;; with straight
+(use-package gptel-plus
+  :straight (:host github :repo "benthamite/gptel-plus"))
+
+;; with quelpa
+(use-package gptel-plus
+  :quelpa (gptel-plus :fetcher github :repo "benthamite/gptel-plus"))
+@end lisp
+
+@node User options
+@chapter User options
+
+All user options belong to the @code{gptel-plus} customization group, which is itself a child of the @code{gptel} group.
+
+@menu
+* Cost estimation parameters::
+@end menu
+
+@node Cost estimation parameters
+@section Cost estimation parameters
+
+@vindex gptel-plus-calculate-cost
+@vindex gptel-plus-tokens-per-word
+@vindex gptel-plus-tokens-in-output
+@vindex gptel-plus-cost-warning-threshold
+
+The user option @code{gptel-plus-calculate-cost} controls whether cost estimation and tracking are active.  When set to @code{nil}, no cost information is computed or displayed.  The default value is @code{t}.
+
+The user option @code{gptel-plus-tokens-per-word} specifies the approximate number of tokens per word, used for converting word counts into token counts when estimating input costs.  The default value is @samp{1.5}.  If your typical prompts use a language other than English, or if you frequently include code (which tends to have a higher token-to-word ratio), you may want to increase this value.
+
+The user option @code{gptel-plus-tokens-in-output} specifies the assumed number of tokens in the model's response, used for estimating output costs.  The default value is @samp{100}.  If your typical interactions produce longer responses, increase this value to get more accurate cost estimates.  For a conservative upper bound, you could set it to the value of @code{gptel-max-tokens}, though this will overestimate costs for most requests.
+
+The user option @code{gptel-plus-cost-warning-threshold} sets the dollar amount above which @samp{gptel-plus} prompts for confirmation before sending a request (@ref{Cost warning}).  The default value is @samp{0.15} (fifteen cents).  Set it to @code{nil} to disable the warning entirely.  The type accepts either a number or @code{nil}.
+
+@node Commands
+@chapter Commands
+
+@menu
+* Cost estimation::
+* Context persistence::
+* Context file management::
+* Automatic mode activation::
+@end menu
+
+@node Cost estimation
+@section Cost estimation
+
+Cost estimation in @samp{gptel-plus} has two complementary aspects: an @emph{ex ante} estimate computed before you send a request, and an @emph{ex post} calculation reported after the response arrives.
+
+@menu
+* Header line display::
+* Ex post cost calculation::
+* Cost warning::
+@end menu
+
+@node Header line display
+@subsection Header line display
+
+When @samp{gptel-plus} is loaded, it replaces the standard gptel header line with an extended version that includes a clickable @samp{[Cost: $X.XX]} indicator.  This indicator shows the estimated cost of sending the current prompt, updated dynamically as you type or modify the context.  Clicking the cost indicator opens the gptel transient menu.
+
+The estimate accounts for three components:
+
+@enumerate
+@item
+The words in the current buffer (from the beginning up to point, or in the active region if one exists).
+@item
+The words in all context files and buffers.
+@item
+A fixed assumed output length.
+@end enumerate
+
+Each word count is multiplied by @code{gptel-plus-tokens-per-word} and then by the model's per-token pricing (read from the @code{:input-cost} and @code{:output-cost} properties that gptel stores on the model symbol).  If no pricing information is available for the current model, the indicator shows @samp{[Cost: N/A]}.
+
+Note that the cost estimate does not account for images or region-based context additions.  The estimate is approximate; the @emph{ex post} calculation (@ref{Ex post cost calculation}) provides the precise figure.
+
+@node Ex post cost calculation
+@subsection Ex post cost calculation
+
+After each gptel request completes, @samp{gptel-plus} reports the exact cost in the echo area (e.g., @samp{Cost of request: $0.0042}).
+
+To obtain the exact token counts, @samp{gptel-plus} temporarily sets @code{gptel-log-level} to @code{info} before the request is sent, which causes gptel to log the full request and response data to the @samp{*gptel-log*} buffer.  After the response arrives, @samp{gptel-plus} parses this log to extract the input and output token counts, computes the cost using the model's pricing, and then restores the original log level and kills the log buffer.
+
+This mechanism handles concurrent requests correctly: if multiple requests are in flight simultaneously, the log level is only restored after the last one completes.
+
+@strong{Note:} This feature currently works only with Anthropic models, because it relies on the Anthropic streaming event format (@samp{message_start} and @samp{message_delta} events).  For other providers, the @emph{ex ante} estimate is still available.
+
+@node Cost warning
+@subsection Cost warning
+
+Before every call to @code{gptel-send}, @samp{gptel-plus} checks whether the estimated cost exceeds @code{gptel-plus-cost-warning-threshold} (@ref{Cost estimation parameters}).  If it does, a @samp{y-or-n-p} prompt asks you to confirm.  If you decline, a second prompt offers to clear the context (via @code{gptel-context-remove-all}), since a large context is typically the reason for a high cost.  Declining both prompts cancels the request with a @code{user-error}.
+
+@node Context persistence
+@section Context persistence
+
+@findex gptel-plus-save-file-context
+@findex gptel-plus-restore-file-context
+
+By default, the list of context files you add to a gptel session is lost when you kill the buffer.  @samp{gptel-plus} provides two commands to persist and restore this context.
+
+The command @code{gptel-plus-save-file-context} (@samp{M-x gptel-plus-save-file-context}) saves the current @code{gptel-context} to the file you are visiting.  In Org mode buffers, the context is stored as a @samp{GPTEL_CONTEXT} property on the first heading.  In Markdown mode buffers, it is stored as a file-local variable.  If a saved context already exists, you are asked to confirm the overwrite.  The command signals an error if the buffer is neither Org nor Markdown.
+
+The command @code{gptel-plus-restore-file-context} (@samp{M-x gptel-plus-restore-file-context}) reads the saved context from the file and re-adds each file to the gptel context via @code{gptel-context-add-file}.  If a context is already active, you are asked to confirm the overwrite.  Files that no longer exist or are not readable are skipped, with a message listing the missing paths.
+
+@node Context file management
+@section Context file management
+
+@findex gptel-plus-list-context-files
+@findex gptel-plus-toggle-mark
+@findex gptel-plus-remove-flagged-context-files
+@findex gptel-plus-refresh-context-files-buffer
+
+The command @code{gptel-plus-list-context-files} (@samp{M-x gptel-plus-list-context-files}) opens a dedicated @samp{*gptel context files*} buffer listing all files in the current gptel context, sorted by size in descending order.  Each entry shows the file's size in kilobytes and its path (abbreviated with @samp{~/} where applicable).  If there are no files in the context, a message is displayed instead.
+
+The buffer uses @code{gptel-context-files-mode}, a special read-only major mode with the following key bindings:
+
+@multitable {aaa} {aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa} {aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+@headitem Key
+@tab Command
+@tab Description
+@item @samp{x}
+@tab @code{gptel-plus-toggle-mark}
+@tab Toggle the removal flag on a file
+@item @samp{D}
+@tab @code{gptel-plus-remove-flagged-context-files}
+@tab Remove all flagged files
+@item @samp{g}
+@tab @code{gptel-plus-refresh-context-files-buffer}
+@tab Refresh the listing
+@item @samp{q}
+@tab @code{kill-current-buffer}
+@tab Close the buffer
+@end multitable
+
+The workflow is similar to dired's flagging mechanism: move to a file entry, press @samp{x} to toggle its flag (the marker changes from @samp{[ ]} to @samp{[X]}), repeat for other files, then press @samp{D} to remove all flagged files from the context at once.  The cost estimate is updated automatically after removal.
+
+@node Automatic mode activation
+@section Automatic mode activation
+
+@findex gptel-plus-enable-gptel-in-org
+@findex gptel-plus-enable-gptel-in-markdown
+
+When you save a gptel conversation, gptel stores session metadata in the file (as Org properties or as Markdown file-local variables).  However, reopening that file does not automatically re-enable @code{gptel-mode}.  @samp{gptel-plus} provides hook functions that detect these markers and activate @code{gptel-mode} automatically.
+
+The function @code{gptel-plus-enable-gptel-in-org} checks for gptel-related Org properties (such as @samp{GPTEL_SYSTEM}, @samp{GPTEL_BACKEND}, @samp{GPTEL_MODEL}, and others) and enables @code{gptel-mode} if any are found.
+
+The function @code{gptel-plus-enable-gptel-in-markdown} checks for gptel-related file-local variables (such as @code{gptel-mode}, @code{gptel-model}, @code{gptel--backend-name}, and @code{gptel--bounds}) and enables @code{gptel-mode} if any are present.
+
+To use these, add the appropriate hooks to your configuration:
+
+@lisp
+(add-hook 'org-mode-hook #'gptel-plus-enable-gptel-in-org)
+(add-hook 'markdown-mode-hook #'gptel-plus-enable-gptel-in-markdown)
+@end lisp
+
+When activating @code{gptel-mode} automatically, @samp{gptel-plus} takes care not to mark the buffer as modified (which would otherwise happen as a side effect of enabling the mode).  It also disables @code{breadcrumb-mode} if active, since it conflicts with the gptel header line.
+
+@node Functions
+@chapter Functions
+
+@menu
+* Cost computation::
+* Word counting::
+* Context detection::
+@end menu
+
+@node Cost computation
+@section Cost computation
+
+@findex gptel-plus-get-total-cost
+@findex gptel-plus-get-input-cost
+@findex gptel-plus-get-output-cost
+@findex gptel-plus-normalize-cost
+@findex gptel-plus-update-context-cost
+
+The function @code{gptel-plus-get-total-cost} returns the estimated total cost (in dollars) of sending the current prompt, or @code{nil} if cost information is unavailable for the active model.  It combines the input and output costs and normalizes the result.  This is the function used by the header line display (@ref{Header line display}).
+
+The function @code{gptel-plus-get-input-cost} returns the estimated input cost, combining the buffer content cost with the cached context cost.  The function @code{gptel-plus-get-output-cost} returns the estimated output cost based on @code{gptel-plus-tokens-in-output} (@ref{Cost estimation parameters}).
+
+The function @code{gptel-plus-normalize-cost} converts a raw cost figure (expressed in cost-per-million-tokens units) into a dollar amount by dividing by one million.
+
+The function @code{gptel-plus-update-context-cost} recalculates and caches the cost of the current context files.  It is called automatically (via advice) whenever files are added to or removed from the context, and whenever the model or backend changes.  You generally do not need to call it directly, but it is available if you modify @code{gptel-context} programmatically.
+
+@node Word counting
+@section Word counting
+
+@findex gptel-plus-count-words-in-buffer
+@findex gptel-plus-count-words-in-context
+
+The function @code{gptel-plus-count-words-in-buffer} returns the word count for the portion of the buffer that will be sent to the model.  If a region is active, it counts words in the region; otherwise, it counts from the beginning of the buffer to point (since gptel sends everything up to point).
+
+The function @code{gptel-plus-count-words-in-context} iterates over all entries in @code{gptel-context} and sums their word counts.  Buffer entries are counted directly; file entries are read into a temporary buffer for counting.  Binary files and unreadable files are skipped.  Dead buffers (killed since they were added to the context) are also skipped.
+
+@node Context detection
+@section Context detection
+
+@findex gptel-plus-file-has-gptel-local-variable-p
+@findex gptel-plus-file-has-gptel-org-property-p
+
+The function @code{gptel-plus-file-has-gptel-local-variable-p} returns non-nil if the current buffer has any gptel-related file-local variable set.  It checks for @code{gptel-mode}, @code{gptel-model}, @code{gptel--backend-name}, and @code{gptel--bounds}.
+
+The function @code{gptel-plus-file-has-gptel-org-property-p} returns non-nil if the current Org buffer has any gptel-related property at the beginning of the file.  It checks for @samp{GPTEL_SYSTEM}, @samp{GPTEL_BACKEND}, @samp{GPTEL_MODEL}, @samp{GPTEL_TEMPERATURE}, @samp{GPTEL_MAX_TOKENS}, and @samp{GPTEL_NUM_MESSAGES_TO_SEND}.
+
+Both functions are used by the automatic mode activation hooks (@ref{Automatic mode activation}) and can also be called independently to test whether a file contains gptel data.
+
+@node Troubleshooting
+@chapter Troubleshooting
+
+@menu
+* Cost shows ``N/A''::
+* Ex post cost not reported::
+* Context restore skips files::
+@end menu
+
+@node Cost shows ``N/A''
+@section Cost shows ``N/A''
+
+The header line displays @samp{[Cost: N/A]} when the current model does not have @code{:input-cost} or @code{:output-cost} properties set.  These properties are defined by gptel when you register a backend.  If you are using a custom backend, ensure that the model symbols have these properties set (the values are in dollars per million tokens).
+
+@node Ex post cost not reported
+@section Ex post cost not reported
+
+The @emph{ex post} cost calculation currently works only with Anthropic models.  For other providers, the echo area message will not appear.  The @emph{ex ante} estimate in the header line is provider-agnostic and works for any model that has pricing properties set.
+
+If the cost calculation fails (e.g., due to unexpected log format changes in a new gptel version), a message of the form @samp{gptel-plus: failed to calculate cost: ...} will appear in the echo area instead of silently failing.
+
+@node Context restore skips files
+@section Context restore skips files
+
+When restoring a saved context, @code{gptel-plus-restore-file-context} checks that each file exists and is readable before adding it.  If files have been moved, renamed, or deleted since the context was saved, they are skipped and a message lists the missing paths.  Update the saved context by saving it again after correcting your file paths.
+
+@node Indices
+@chapter Indices
+
+@menu
+* Function index::
+* Variable index::
+@end menu
+
+@node Function index
+@section Function index
+
+@printindex fn
+
+@node Variable index
+@section Variable index
+
+@printindex vr
+
+@bye
