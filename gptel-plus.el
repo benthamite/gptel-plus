@@ -152,29 +152,19 @@ TYPE is either `buffer' or `context'."
 (defun gptel-plus-count-words-in-context ()
   "Iterate over the files and buffers in context and add up the word count in each.
 Binaries are skipped. Also works with buffers in context."
-  (cl-reduce (lambda (accum item)
-	       (let ((file-or-buffer (car item)))
-		 (cond
-		  ;; If it's a buffer
-		  ((bufferp file-or-buffer)
-		   (if (buffer-live-p file-or-buffer)
-		       (+ accum
-			  (with-current-buffer file-or-buffer
-			    (count-words (point-min) (point-max))))
-		     accum))
-		  ;; If it's a file
-		  ((stringp file-or-buffer)
-		   (if (or (not (file-readable-p file-or-buffer))
-			   (gptel--file-binary-p file-or-buffer))
-		       accum
-		     (+ accum
-			(with-temp-buffer
-			  (insert-file-contents file-or-buffer)
-			  (count-words (point-min) (point-max))))))
-		  ;; Otherwise (shouldn't happen)
-		  (t accum))))
-	     gptel-context
-	     :initial-value 0))
+  (cl-loop for (file-or-buffer) in gptel-context
+           sum (cond
+                ((and (bufferp file-or-buffer)
+                      (buffer-live-p file-or-buffer))
+                 (with-current-buffer file-or-buffer
+                   (count-words (point-min) (point-max))))
+                ((and (stringp file-or-buffer)
+                      (file-readable-p file-or-buffer)
+                      (not (gptel--file-binary-p file-or-buffer)))
+                 (with-temp-buffer
+                   (insert-file-contents file-or-buffer)
+                   (count-words (point-min) (point-max))))
+                (t 0))))
 
 (defun gptel-plus-confirm-when-costs-high (&optional _)
   "Prompt user for confirmation if the cost of current prompt exceeds threshold.
@@ -265,90 +255,102 @@ Return (INPUT-TOKENS . MODEL-SYMBOL), or nil."
 
 ;;;;;; Display costs
 
+(defun gptel-plus--header-system-button ()
+  "Return a propertized system prompt button for the header line."
+  (propertize
+   (buttonize
+    (format "[Prompt: %s]"
+	    (or (car-safe (rassoc gptel--system-message gptel-directives))
+		(gptel--describe-directive gptel--system-message 15)))
+    (lambda (&rest _) (gptel-system-prompt)))
+   'mouse-face 'highlight
+   'help-echo "System message for session"))
+
+(defun gptel-plus--header-cost-button ()
+  "Return a propertized cost button for the header line."
+  (let* ((cost (gptel-plus-get-total-cost))
+	 (cost-msg (if cost (format "[Cost: $%.2f]" cost) "[Cost: N/A]")))
+    (propertize
+     (buttonize cost-msg (lambda (&rest _) (gptel-menu)))
+     'mouse-face 'highlight
+     'help-echo (if cost
+		    "Cost of the current prompt"
+		  "There is no cost information available for this model"))))
+
+(defun gptel-plus--header-context-info ()
+  "Return a propertized context info button for the header line, or nil."
+  (and gptel-context
+       (cl-loop
+	for entry in gptel-context
+	if (bufferp (or (car-safe entry) entry)) count it into bufs
+	else count (stringp (or (car-safe entry) entry)) into files
+	finally return
+	(propertize
+	 (buttonize
+	  (concat "[Context: "
+		  (and (> bufs 0) (format "%d buf" bufs))
+		  (and (> bufs 1) "s")
+		  (and (> bufs 0) (> files 0) ", ")
+		  (and (> files 0) (format "%d file" files))
+		  (and (> files 1) "s")
+		  "]")
+	  (lambda (&rest _)
+	    (require 'gptel-context)
+	    (gptel-context--buffer-setup)))
+	 'mouse-face 'highlight
+	 'help-echo "Active gptel context"))))
+
+(defun gptel-plus--header-media-button ()
+  "Return a propertized media tracking button for the header line, or nil."
+  (and (gptel--model-capable-p 'media)
+       (let ((toggle (lambda (&rest _)
+		       (setq-local gptel-track-media (not gptel-track-media))
+		       (if gptel-track-media
+			   (progn
+			     (run-hooks 'gptel-refresh-buffer-hook)
+			     (message "Sending media from included links."))
+			 (without-restriction (gptel--annotate-link-clear))
+			 (message "Ignoring links.  Only link text will be sent."))
+		       (run-at-time 0 nil #'force-mode-line-update))))
+	 (if gptel-track-media
+	     (propertize
+	      (buttonize "[Sending media]" toggle)
+	      'mouse-face 'highlight
+	      'help-echo "Sending media from links/urls when supported.\nClick to toggle")
+	   (propertize
+	    (buttonize "[Ignoring media]" toggle)
+	    'mouse-face 'highlight
+	    'help-echo "Ignoring media from links/urls.\nClick to toggle")))))
+
+(defun gptel-plus--header-tools-button ()
+  "Return a propertized tools button for the header line, or nil."
+  (when (and gptel-use-tools gptel-tools)
+    (let ((toggle (lambda (&rest _) (interactive)
+		    (run-at-time 0 nil
+				 (lambda () (call-interactively #'gptel-tools))))))
+      (propertize
+       (buttonize (pcase (length gptel-tools)
+		    (0 "[No tools]") (1 "[1 tool]")
+		    (len (format "[%d tools]" len)))
+		  toggle)
+       'mouse-face 'highlight
+       'help-echo "Select tools"))))
+
 (setq gptel--header-line-info
       '(:eval
 	(let* ((model (gptel--model-name gptel-model))
-               (system
-		(propertize
-		 (buttonize
-		  (format "[Prompt: %s]"
-			  (or (car-safe (rassoc gptel--system-message gptel-directives))
-                              (gptel--describe-directive gptel--system-message 15)))
-		  (lambda (&rest _) (gptel-system-prompt)))
-		 'mouse-face 'highlight
-		 'help-echo "System message for session"))
-	       (cost (let* ((cost (gptel-plus-get-total-cost))
-			    (cost-msg (if cost
-					  (format "[Cost: $%.2f]" cost)
-					"[Cost: N/A]")))
-		       (propertize
-			(buttonize cost-msg
-				   (lambda (&rest _) (gptel-menu)))
-			'mouse-face 'highlight
-			'help-echo (if cost
-				       "Cost of the current prompt"
-				     "There is no cost information available for this model"))))
-               (context
-		(and gptel-context
-                     (cl-loop
-                      for entry in gptel-context
-                      if (bufferp (or (car-safe entry) entry)) count it into bufs
-                      else count (stringp (or (car-safe entry) entry)) into files
-                      finally return
-                      (propertize
-                       (buttonize
-			(concat "[Context: "
-				(and (> bufs 0) (format "%d buf" bufs))
-				(and (> bufs 1) "s")
-				(and (> bufs 0) (> files 0) ", ")
-				(and (> files 0) (format "%d file" files))
-				(and (> files 1) "s")
-				"]")
-			(lambda (&rest _)
-			  (require 'gptel-context)
-			  (gptel-context--buffer-setup)))
-                       'mouse-face 'highlight
-                       'help-echo "Active gptel context"))))
-               (toggle-track-media
-		(lambda (&rest _)
-		  (setq-local gptel-track-media (not gptel-track-media))
-		  (if gptel-track-media
-                      (progn
-			(run-hooks 'gptel-refresh-buffer-hook)
-			(message "Sending media from included links."))
-                    (without-restriction (gptel--annotate-link-clear))
-                    (message "Ignoring links.  Only link text will be sent."))
-		  (run-at-time 0 nil #'force-mode-line-update)))
-               (track-media
-		(and (gptel--model-capable-p 'media)
-                     (if gptel-track-media
-			 (propertize
-			  (buttonize "[Sending media]" toggle-track-media)
-			  'mouse-face 'highlight
-			  'help-echo
-			  "Sending media from links/urls when supported.\nClick to toggle")
-                       (propertize
-			(buttonize "[Ignoring media]" toggle-track-media)
-			'mouse-face 'highlight
-			'help-echo
-			"Ignoring media from links/urls.\nClick to toggle"))))
-               (toggle-tools (lambda (&rest _) (interactive)
-                               (run-at-time 0 nil
-                                            (lambda () (call-interactively #'gptel-tools)))))
-               (tools (when (and gptel-use-tools gptel-tools)
-			(propertize
-			 (buttonize (pcase (length gptel-tools)
-                                      (0 "[No tools]") (1 "[1 tool]")
-                                      (len (format "[%d tools]" len)))
-                                    toggle-tools)
-			 'mouse-face 'highlight
-			 'help-echo "Select tools"))))
+	       (system (gptel-plus--header-system-button))
+	       (cost (gptel-plus--header-cost-button))
+	       (context (gptel-plus--header-context-info))
+	       (track-media (gptel-plus--header-media-button))
+	       (tools (gptel-plus--header-tools-button)))
 	  (concat
 	   (propertize
             " " 'display
             `(space :align-to (- right
 				 ,(+ 5 (length model) (length system)
-                                     (length track-media) (length context) (length cost) (length tools)))))
+                                     (length track-media) (length context)
+				     (length cost) (length tools)))))
 	   tools (and track-media " ") track-media (and context " ") context " " cost " " system " "
 	   (propertize
             (buttonize (concat "[" model "]")
@@ -433,19 +435,7 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
 
 (defun gptel-plus-save-file-context-in-markdown ()
   "Save the current `gptel' file context in file visited by the current MD buffer."
-  (gptel-plus-remove-local-variables-section)
-  (let ((context (format "%S" gptel-context)))
-    (add-file-local-variable 'gptel-plus-context context)))
-
-(defun gptel-plus-remove-local-variables-section ()
-  "Remove the existing Local Variables section from the current buffer."
-  (save-excursion
-    (goto-char (point-max))
-    (when (re-search-backward "^<!-- Local Variables: -->" nil t)
-      (let ((start (point)))
-        (when (re-search-forward "^<!-- End: -->" nil t)
-          (delete-region start (point))
-          (delete-blank-lines))))))
+  (add-file-local-variable 'gptel-plus-context (format "%S" gptel-context)))
 
 ;;;;;; Get saved
 
@@ -609,6 +599,17 @@ updates the cost, and then refreshes the buffer."
     (with-current-buffer buf
       (gptel-plus-list-context-files-internal)
       (message "Context file listing refreshed."))))
+
+(defun gptel-plus-unload-function ()
+  "Remove gptel-plus advice, hooks, and cleanup state.
+Called automatically by `unload-feature'."
+  (advice-remove 'gptel-context-add-file #'gptel-plus-update-context-cost)
+  (advice-remove 'gptel-context-remove #'gptel-plus-update-context-cost)
+  (advice-remove 'gptel--set-with-scope #'gptel-plus--update-cost-on-model-change)
+  (advice-remove 'gptel-send #'gptel-plus-confirm-when-costs-high)
+  (remove-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
+  (remove-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
+  nil)
 
 (provide 'gptel-plus)
 ;;; gptel-plus.el ends here
