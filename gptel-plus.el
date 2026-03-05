@@ -4,7 +4,7 @@
 
 ;; Author: Pablo Stafforini
 ;; URL: https://github.com/benthamite/gptel-plus
-;; Version: 0.1
+;; Version: 0.2
 ;; Package-Requires: ((emacs "29.1") (gptel "0.7.1"))
 
 ;; This file is NOT part of GNU Emacs.
