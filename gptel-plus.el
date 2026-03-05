@@ -192,6 +192,38 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 ;;;;; ex post cost estimation
 
 ;; FIXME: this only works for Anthropic. Generalize it to all major AI labs.
+(defun gptel-plus--read-log-event-json ()
+  "Read the JSON data line following point in the log buffer.
+Return the parsed JSON object, or nil if no data line is found."
+  (when (re-search-forward "^data: \\(.*\\)" nil t)
+    (json-read-from-string (match-string 1))))
+
+(defun gptel-plus--extract-output-tokens ()
+  "Extract output tokens from the last message_delta event in the log buffer.
+Return (OUTPUT-TOKENS . END-OF-REQUEST-POS), or nil."
+  (goto-char (point-max))
+  (when (re-search-backward "^event: message_delta" nil t)
+    (let ((end-of-request-pos (point)))
+      (when-let* ((json (gptel-plus--read-log-event-json))
+                  (delta (cdr (assoc 'delta json)))
+                  ((equal (cdr (assoc 'stop_reason delta)) "end_turn"))
+                  (usage (cdr (assoc 'usage json)))
+                  (output-tokens (cdr (assoc 'output_tokens usage))))
+        (cons output-tokens end-of-request-pos)))))
+
+(defun gptel-plus--extract-input-tokens-and-model (search-bound)
+  "Extract input tokens and model from message_start before SEARCH-BOUND.
+Return (INPUT-TOKENS . MODEL-SYMBOL), or nil."
+  (goto-char search-bound)
+  (when (re-search-backward "^event: message_start" nil t)
+    (when-let* ((json (gptel-plus--read-log-event-json))
+                (message (cdr (assoc 'message json)))
+                (usage (cdr (assoc 'usage message)))
+                (input-tokens (cdr (assoc 'input_tokens usage)))
+                (model-id (cdr (assoc 'model message)))
+                (model-sym (intern-soft model-id)))
+      (cons input-tokens model-sym))))
+
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request."
   (unwind-protect
@@ -199,36 +231,18 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
         (condition-case err
             (when-let* ((log-buffer (get-buffer "*gptel-log*")))
               (with-current-buffer log-buffer
-                (goto-char (point-max))
-                ;; Find the end of the request.
-                (when (re-search-backward "^event: message_delta" nil t)
-                  (let ((end-of-request-pos (point)))
-                    (when (re-search-forward "^data: \\(.*\\)" nil t)
-                      (let* ((json-text (match-string 1))
-                             (json (json-read-from-string json-text))
-                             (delta (cdr (assoc 'delta json))))
-                        (when (and delta (equal (cdr (assoc 'stop_reason delta)) "end_turn"))
-                          (let* ((usage (cdr (assoc 'usage json)))
-                                 (output-tokens (and usage (cdr (assoc 'output_tokens usage)))))
-                            (goto-char end-of-request-pos)
-                            (when (and output-tokens (re-search-backward "^event: message_start" nil t))
-                              (when (re-search-forward "^data: \\(.*\\)" nil t)
-                                (let* ((json-text (match-string 1))
-                                       (json (json-read-from-string json-text))
-                                       (message (cdr (assoc 'message json)))
-                                       (usage (cdr (assoc 'usage message)))
-                                       (input-tokens (and usage (cdr (assoc 'input_tokens usage))))
-                                       (model-id (and message (cdr (assoc 'model message)))))
-                                  (when (and input-tokens model-id)
-                                    (let* ((model-sym (intern-soft model-id))
-                                           (input-cost-per-1m (and model-sym (get model-sym :input-cost)))
-                                           (output-cost-per-1m (and model-sym (get model-sym :output-cost))))
-                                      (when (and input-cost-per-1m output-cost-per-1m)
-                                        (let ((total-cost
-                                               (gptel-plus-normalize-cost
-                                                (+ (* input-tokens input-cost-per-1m)
-                                                   (* output-tokens output-cost-per-1m)))))
-                                          (message "Cost of request: $%.4f" total-cost))))))))))))))))
+                (when-let* ((output-result (gptel-plus--extract-output-tokens))
+                            (output-tokens (car output-result))
+                            (input-result (gptel-plus--extract-input-tokens-and-model
+                                           (cdr output-result)))
+                            (input-tokens (car input-result))
+                            (model-sym (cdr input-result))
+                            (input-cost-per-1m (get model-sym :input-cost))
+                            (output-cost-per-1m (get model-sym :output-cost)))
+                  (message "Cost of request: $%.4f"
+                           (gptel-plus-normalize-cost
+                            (+ (* input-tokens input-cost-per-1m)
+                               (* output-tokens output-cost-per-1m)))))))
           (error (message "gptel-plus: failed to calculate cost: %s" (error-message-string err)))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
@@ -405,9 +419,9 @@ In Org files, saves as a file property. In Markdown, as a file-local variable."
   (if (derived-mode-p 'org-mode 'markdown-mode)
       (when (or (not (gptel-plus-get-saved-context))
 		(yes-or-no-p "Overwrite existing file context? "))
-	(pcase major-mode
-	  ('org-mode (gptel-plus-save-file-context-in-org))
-	  ('markdown-mode (gptel-plus-save-file-context-in-markdown)))
+	(if (derived-mode-p 'org-mode)
+	    (gptel-plus-save-file-context-in-org)
+	  (gptel-plus-save-file-context-in-markdown))
 	(message "Saved `gptel' context: %s" (prin1-to-string gptel-context)))
     (user-error "Not in an Org or Markdown buffer")))
 
@@ -445,14 +459,14 @@ cause arbitrary code execution at read time."
 
 (defun gptel-plus-get-saved-context ()
   "Get the saved `gptel' context from the file visited by the current buffer."
-  (pcase major-mode
-    ('org-mode
-     (when-let* ((gptel-context-prop (org-entry-get (point-min) "GPTEL_CONTEXT")))
-       (gptel-plus--safe-read gptel-context-prop)))
-    ('markdown-mode
-     (when (stringp gptel-plus-context)
-       (gptel-plus--safe-read gptel-plus-context)))
-    (_ (user-error "Not in an Org or Markdown buffer"))))
+  (cond
+   ((derived-mode-p 'org-mode)
+    (when-let* ((gptel-context-prop (org-entry-get (point-min) "GPTEL_CONTEXT")))
+      (gptel-plus--safe-read gptel-context-prop)))
+   ((derived-mode-p 'markdown-mode)
+    (when (stringp gptel-plus-context)
+      (gptel-plus--safe-read gptel-plus-context)))
+   (t (user-error "Not in an Org or Markdown buffer"))))
 
 ;;;;;; Restore
 
