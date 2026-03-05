@@ -269,6 +269,42 @@ This final sentence puts us over one hundred words."
             (should (= gptel-plus--context-cost 13.5))))
       (delete-file f))))
 
+(ert-deftest gptel-plus-test-custom-tokens-per-word ()
+  "Changing tokens-per-word scales cost proportionally."
+  (gptel-plus-test-with-model 3.0 15.0
+    (gptel-plus-test-with-temp-buffer "one two three four"
+      ;; Default 1.5: 4 * 1.5 * 3.0 = 18.0
+      (should (= (gptel-plus-get-buffer-cost) 18.0))
+      ;; Double the ratio: 4 * 3.0 * 3.0 = 36.0
+      (let ((gptel-plus-tokens-per-word 3.0))
+        (should (= (gptel-plus-get-buffer-cost) 36.0))))))
+
+(ert-deftest gptel-plus-test-custom-tokens-in-output ()
+  "Changing tokens-in-output scales output cost."
+  (gptel-plus-test-with-model 3.0 15.0
+    (let ((gptel-plus-tokens-in-output 500))
+      ;; 500 * 15.0 = 7500
+      (should (= (gptel-plus-get-output-cost) 7500.0)))))
+
+(ert-deftest gptel-plus-test-update-cost-on-model-change-triggers ()
+  "Cost update triggers when symbol is gptel-model or gptel-backend."
+  (let ((updated nil))
+    (cl-letf (((symbol-function 'gptel-plus-update-context-cost)
+               (lambda (&rest _) (setq updated t))))
+      (gptel-plus--update-cost-on-model-change 'gptel-model nil)
+      (should updated)
+      (setq updated nil)
+      (gptel-plus--update-cost-on-model-change 'gptel-backend nil)
+      (should updated))))
+
+(ert-deftest gptel-plus-test-update-cost-on-model-change-ignores-other ()
+  "Cost update does NOT trigger for unrelated symbols."
+  (let ((updated nil))
+    (cl-letf (((symbol-function 'gptel-plus-update-context-cost)
+               (lambda (&rest _) (setq updated t))))
+      (gptel-plus--update-cost-on-model-change 'gptel-temperature nil)
+      (should-not updated))))
+
 ;;;; Ex post cost estimation (log parsing)
 
 (defconst gptel-plus-test--sample-message-start
@@ -388,6 +424,82 @@ This final sentence puts us over one hundred words."
     ;; Log level NOT restored (still have outstanding requests)
     (should (eq gptel-log-level 'info))))
 
+(ert-deftest gptel-plus-test-extract-output-tokens-wrong-stop-reason ()
+  "Returns nil when stop_reason is not end_turn."
+  (let ((buf (gptel-plus-test--make-log-buffer
+              (list (cons "message_delta"
+                          "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":50}}")))))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (null (gptel-plus--extract-output-tokens))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-picks-last-request ()
+  "When log has multiple requests, parser finds the last message_delta."
+  (let* ((start1 "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":100,\"output_tokens\":0}}}")
+         (delta1 "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":30}}")
+         (start2 "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_02\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":200,\"output_tokens\":0}}}")
+         (delta2 "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":50}}")
+         (buf (gptel-plus-test--make-log-buffer
+               (list (cons "message_start" start1)
+                     (cons "message_delta" delta1)
+                     (cons "message_start" start2)
+                     (cons "message_delta" delta2)))))
+    (unwind-protect
+        (with-current-buffer buf
+          ;; Should find the LAST delta (50 output tokens)
+          (let ((result (gptel-plus--extract-output-tokens)))
+            (should result)
+            (should (= (car result) 50)))
+          ;; And the corresponding start (200 input tokens)
+          (let* ((output-result (gptel-plus--extract-output-tokens))
+                 (input-result (gptel-plus--extract-input-tokens-and-model
+                                (cdr output-result))))
+            (should input-result)
+            (should (= (car input-result) 200))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-error-handling ()
+  "Malformed log data produces error message but does not signal."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info)
+        (last-msg nil))
+    (let ((buf (get-buffer-create "*gptel-log*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "event: message_delta\ndata: {invalid json!}\n")))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'message)
+                     (lambda (fmt &rest args) (setq last-msg (apply #'format fmt args)))))
+            ;; Should not signal - errors are caught
+            (gptel-plus-calculate-exact-cost))
+          ;; Error message displayed
+          (should (string-match-p "failed to calculate" last-msg))
+          ;; Counter still decremented (unwind-protect)
+          (should (= gptel-plus--logging-requests-count 0)))
+      (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-disabled ()
+  "When cost calculation is disabled, still decrements counter and cleans up."
+  (let ((gptel-plus-calculate-cost nil)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info))
+    (gptel-plus-test--make-log-buffer
+     (list (cons "message_start" gptel-plus-test--sample-message-start)
+           (cons "message_delta" gptel-plus-test--sample-message-delta)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'message) #'ignore))
+            (gptel-plus-calculate-exact-cost))
+          (should (= gptel-plus--logging-requests-count 0)))
+      (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
 (ert-deftest gptel-plus-test-prepare-cost-calculation ()
   "Prepare saves original log level and increments counter."
   (let ((gptel-plus-calculate-cost t)
@@ -470,6 +582,20 @@ This final sentence puts us over one hundred words."
   (with-temp-buffer
     (setq-local gptel--backend-name "Anthropic")
     (should (gptel-plus-file-has-gptel-local-variable-p))))
+
+(ert-deftest gptel-plus-test-file-has-gptel-org-property-yes ()
+  "Detects gptel Org properties in a buffer."
+  (with-temp-buffer
+    (org-mode)
+    (insert ":PROPERTIES:\n:GPTEL_MODEL: claude-sonnet-4-5-20250514\n:END:\n")
+    (should (gptel-plus-file-has-gptel-org-property-p))))
+
+(ert-deftest gptel-plus-test-file-has-gptel-org-property-no ()
+  "Returns nil in an Org buffer without gptel properties."
+  (with-temp-buffer
+    (org-mode)
+    (insert "* Just a heading\nSome text.\n")
+    (should-not (gptel-plus-file-has-gptel-org-property-p))))
 
 (ert-deftest gptel-plus-test-enable-gptel-common-preserves-modified ()
   "Enabling gptel-mode does not mark an unmodified buffer as modified."
@@ -667,6 +793,28 @@ This final sentence puts us over one hundred words."
       (should (string-match-p "1 file\\]" info))
       (should-not (string-match-p "files" info)))))
 
+(ert-deftest gptel-plus-test-header-context-info-only-buffers ()
+  "Context with only buffers shows buffer count without file section."
+  (let ((buf1 (generate-new-buffer " *ctx-1*"))
+        (buf2 (generate-new-buffer " *ctx-2*")))
+    (unwind-protect
+        (let ((gptel-context (list (list buf1) (list buf2))))
+          (let ((info (gptel-plus--header-context-info)))
+            (should info)
+            (should (string-match-p "2 bufs" info))
+            (should-not (string-match-p "file" info))))
+      (kill-buffer buf1)
+      (kill-buffer buf2))))
+
+(ert-deftest gptel-plus-test-header-cost-button-cost-disabled ()
+  "Cost button shows N/A when cost calculation is disabled."
+  (gptel-plus-test-with-model 3.0 15.0
+    (let ((gptel-plus-calculate-cost nil))
+      (with-temp-buffer
+        (insert "test")
+        (let ((btn (gptel-plus--header-cost-button)))
+          (should (string-match-p "N/A" btn)))))))
+
 (ert-deftest gptel-plus-test-header-tools-button-nil-when-no-tools ()
   "Tools button returns nil when tools are disabled."
   (let ((gptel-use-tools nil)
@@ -733,6 +881,59 @@ This final sentence puts us over one hundred words."
       (delete-file small)
       (delete-file large))))
 
+(ert-deftest gptel-plus-test-list-context-files-internal-path-abbreviation ()
+  "Home directory paths are abbreviated with ~/."
+  (let* ((home-file (expand-file-name "~/test-gptel-context-file.txt"))
+         (gptel-context (list (list home-file))))
+    (unwind-protect
+        (progn
+          (with-temp-file home-file (insert "content"))
+          (with-temp-buffer
+            (gptel-context-files-mode)
+            (gptel-plus-list-context-files-internal)
+            (goto-char (point-min))
+            ;; Should show ~/ abbreviation
+            (should (search-forward "~/test-gptel-context-file.txt" nil t))
+            ;; Should NOT show the full expanded path
+            (goto-char (point-min))
+            (should-not (search-forward (expand-file-name "~/") nil t))))
+      (when (file-exists-p home-file)
+        (delete-file home-file)))))
+
+(ert-deftest gptel-plus-test-list-context-files-internal-text-properties ()
+  "Each file entry gets gptel-context-file and gptel-flag text properties."
+  (let* ((f (gptel-plus-test--make-temp-file "some content"))
+         (gptel-context (list (list f))))
+    (unwind-protect
+        (with-temp-buffer
+          (gptel-context-files-mode)
+          (gptel-plus-list-context-files-internal)
+          ;; Find the line with the file entry (after header)
+          (goto-char (point-min))
+          (search-forward "[ ]" nil t)
+          (let ((line-start (line-beginning-position)))
+            (should (equal (get-text-property line-start 'gptel-context-file) f))
+            (should (null (get-text-property line-start 'gptel-flag)))))
+      (delete-file f))))
+
+(ert-deftest gptel-plus-test-list-context-files-internal-skips-buffers ()
+  "Buffer entries in context are filtered out (only files listed)."
+  (let ((buf (generate-new-buffer " *test-buf-ctx*"))
+        (f (gptel-plus-test--make-temp-file "file content")))
+    (unwind-protect
+        (let ((gptel-context (list (list buf) (list f))))
+          (with-temp-buffer
+            (gptel-context-files-mode)
+            (gptel-plus-list-context-files-internal)
+            ;; Count [ ] markers - should be 1 (only the file)
+            (goto-char (point-min))
+            (let ((count 0))
+              (while (search-forward "[ ]" nil t)
+                (cl-incf count))
+              (should (= count 1)))))
+      (when (buffer-live-p buf) (kill-buffer buf))
+      (delete-file f))))
+
 ;;;; Cost warning
 
 (ert-deftest gptel-plus-test-confirm-costs-below-threshold ()
@@ -790,16 +991,32 @@ This final sentence puts us over one hundred words."
 
 ;;;; Unload function
 
-(ert-deftest gptel-plus-test-unload-returns-nil ()
-  "Unload function returns nil (telling Emacs it handled cleanup)."
-  ;; We can't easily test that advice is removed without re-adding it,
-  ;; but we can verify the return value contract.
-  (should (null (gptel-plus-unload-function)))
-  ;; Re-add the advice that unload removed so the package still works
+(ert-deftest gptel-plus-test-unload-removes-advice ()
+  "Unload function removes all advice and hooks."
+  ;; Ensure advice is present before unloading
   (advice-add 'gptel-context-add-file :after #'gptel-plus-update-context-cost)
   (advice-add 'gptel-context-remove :after #'gptel-plus-update-context-cost)
   (advice-add 'gptel--set-with-scope :after #'gptel-plus--update-cost-on-model-change)
-  (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high))
+  (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
+  (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
+  (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
+  ;; Unload
+  (should (null (gptel-plus-unload-function)))
+  ;; Verify advice removed
+  (should-not (advice-member-p #'gptel-plus-update-context-cost 'gptel-context-add-file))
+  (should-not (advice-member-p #'gptel-plus-update-context-cost 'gptel-context-remove))
+  (should-not (advice-member-p #'gptel-plus--update-cost-on-model-change 'gptel--set-with-scope))
+  (should-not (advice-member-p #'gptel-plus-confirm-when-costs-high 'gptel-send))
+  ;; Verify hooks removed
+  (should-not (memq #'gptel-plus-calculate-exact-cost gptel-post-response-functions))
+  (should-not (memq #'gptel-plus-prepare-cost-calculation gptel-post-request-hook))
+  ;; Re-add so the package still works for remaining tests
+  (advice-add 'gptel-context-add-file :after #'gptel-plus-update-context-cost)
+  (advice-add 'gptel-context-remove :after #'gptel-plus-update-context-cost)
+  (advice-add 'gptel--set-with-scope :after #'gptel-plus--update-cost-on-model-change)
+  (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
+  (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost 100)
+  (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation))
 
 ;;;; Constants
 
