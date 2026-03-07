@@ -246,13 +246,18 @@ Return a plist (:input-tokens N :output-tokens N :model SYM), or nil."
                       (model-sym (intern-soft model-id)))
             (list :input-tokens input-tokens
                   :output-tokens output-tokens
-                  :model model-sym)))))))
+                  :model model-sym
+                  :cache-creation-tokens
+                  (or (cdr (assoc 'cache_creation_input_tokens start-usage)) 0)
+                  :cache-read-tokens
+                  (or (cdr (assoc 'cache_read_input_tokens start-usage)) 0))))))))
 
 (defun gptel-plus--extract-tokens-openai ()
   "Extract token counts and model from an OpenAI response in the log buffer.
-Works for both streaming (with stream_options) and non-streaming responses."
+Works for both streaming (with stream_options) and non-streaming responses.
+Extracts cached token counts when prompt caching is in use."
   (goto-char (point-max))
-  (let (input-tokens output-tokens model-sym)
+  (let (input-tokens output-tokens cached-tokens model-sym)
     (when (re-search-backward
            "\"prompt_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
       (setq input-tokens (string-to-number (match-string 1))))
@@ -262,12 +267,17 @@ Works for both streaming (with stream_options) and non-streaming responses."
       (setq output-tokens (string-to-number (match-string 1))))
     (goto-char (point-max))
     (when (re-search-backward
+           "\"cached_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq cached-tokens (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
            "\"model\"[ \t\n]*:[ \t\n]*\"\\([^\"]+\\)\"" nil t)
       (setq model-sym (intern-soft (match-string 1))))
     (when (and input-tokens output-tokens)
       (list :input-tokens input-tokens
             :output-tokens output-tokens
-            :model model-sym))))
+            :model model-sym
+            :cached-tokens (or cached-tokens 0)))))
 
 (defun gptel-plus--extract-tokens-gemini ()
   "Extract token counts from a Gemini response in the log buffer.

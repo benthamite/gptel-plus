@@ -388,7 +388,7 @@ This final sentence puts us over one hundred words."
 ;;;;; Anthropic extraction
 
 (ert-deftest gptel-plus-test-extract-tokens-anthropic ()
-  "Extracts input tokens, output tokens, and model from Anthropic log."
+  "Extracts input tokens, output tokens, model, and cache tokens from Anthropic log."
   (let ((buf (gptel-plus-test--make-log-buffer
               (list (cons "message_start" gptel-plus-test--sample-message-start)
                     (cons "content_block_delta" "{\"type\":\"content_block_delta\"}")
@@ -399,7 +399,9 @@ This final sentence puts us over one hundred words."
             (should result)
             (should (= (plist-get result :input-tokens) 250))
             (should (= (plist-get result :output-tokens) 75))
-            (should (eq (plist-get result :model) 'test-model))))
+            (should (eq (plist-get result :model) 'test-model))
+            (should (= (plist-get result :cache-creation-tokens) 0))
+            (should (= (plist-get result :cache-read-tokens) 0))))
       (kill-buffer buf))))
 
 (ert-deftest gptel-plus-test-extract-tokens-anthropic-no-delta ()
@@ -455,7 +457,7 @@ This final sentence puts us over one hundred words."
 ;;;;; OpenAI extraction
 
 (ert-deftest gptel-plus-test-extract-tokens-openai ()
-  "Extracts token counts and model from an OpenAI streaming log."
+  "Extracts token counts, model, and cached tokens from an OpenAI streaming log."
   (let ((buf (gptel-plus-test--make-openai-log-buffer
               gptel-plus-test--sample-openai-usage-chunk)))
     (unwind-protect
@@ -464,7 +466,8 @@ This final sentence puts us over one hundred words."
             (should result)
             (should (= (plist-get result :input-tokens) 250))
             (should (= (plist-get result :output-tokens) 75))
-            (should (eq (plist-get result :model) 'test-model))))
+            (should (eq (plist-get result :model) 'test-model))
+            (should (= (plist-get result :cached-tokens) 0))))
       (kill-buffer buf))))
 
 (ert-deftest gptel-plus-test-extract-tokens-openai-no-usage ()
@@ -1302,6 +1305,44 @@ This final sentence puts us over one hundred words."
   (should (member "GPTEL_SYSTEM" gptel-plus-org-properties))
   (should (member "GPTEL_MODEL" gptel-plus-org-properties))
   (should (member "GPTEL_BACKEND" gptel-plus-org-properties)))
+
+;;;; Cache token extraction
+
+(defconst gptel-plus-test--sample-message-start-with-cache
+  "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":50,\"output_tokens\":0,\"cache_creation_input_tokens\":100,\"cache_read_input_tokens\":200}}}"
+  "Sample Anthropic message_start with non-zero cache tokens.")
+
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-cache ()
+  "Extracts cache token counts from Anthropic streaming response."
+  (let ((buf (gptel-plus-test--make-log-buffer
+              (list (cons "message_start" gptel-plus-test--sample-message-start-with-cache)
+                    (cons "message_delta" gptel-plus-test--sample-message-delta)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-anthropic)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 50))
+            (should (= (plist-get result :output-tokens) 75))
+            (should (= (plist-get result :cache-creation-tokens) 100))
+            (should (= (plist-get result :cache-read-tokens) 200))))
+      (kill-buffer buf))))
+
+(defconst gptel-plus-test--sample-openai-with-cache
+  "data: {\"id\":\"chatcmpl-123\",\"model\":\"test-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":250,\"completion_tokens\":75,\"total_tokens\":325,\"prompt_tokens_details\":{\"cached_tokens\":180}}}\n\ndata: [DONE]\n"
+  "Sample OpenAI streaming response with cached tokens.")
+
+(ert-deftest gptel-plus-test-extract-tokens-openai-cached ()
+  "Extracts cached token count from OpenAI response."
+  (let ((buf (gptel-plus-test--make-openai-log-buffer
+              gptel-plus-test--sample-openai-with-cache)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-openai)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 250))
+            (should (= (plist-get result :output-tokens) 75))
+            (should (= (plist-get result :cached-tokens) 180))))
+      (kill-buffer buf))))
 
 (provide 'gptel-plus-test)
 ;;; gptel-plus-test.el ends here
