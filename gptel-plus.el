@@ -745,14 +745,8 @@ updates the cost, and then refreshes the buffer."
         (forward-line 1)))
     (if files-to-remove
         (progn
-          ;; Remove each flagged file from the context.  Use `cl-delete'
-          ;; with `equal' instead of `assq-delete-all', because the keys
-          ;; are strings (file paths) and `assq-delete-all' uses `eq'.
           (dolist (file files-to-remove)
-            (setq gptel-context
-                  (cl-delete file gptel-context
-                             :key #'car :test #'equal)))
-          (gptel-plus-update-context-cost)
+            (gptel-context-remove file))
           (message "Removed flagged files from context: %s"
                    (mapconcat #'identity files-to-remove ", "))
           (gptel-plus-refresh-context-files-buffer))

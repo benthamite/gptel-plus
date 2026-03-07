@@ -968,12 +968,13 @@ This final sentence puts us over one hundred words."
       (should (looking-at "\\[ \\]")))))
 
 (ert-deftest gptel-plus-test-remove-flagged-context-files ()
-  "Flagged files are removed from gptel-context."
+  "Flagged files are removed from gptel-context via gptel-context-remove."
   (let* ((file-a "/tmp/file-a.el")
          (file-b "/tmp/file-b.el")
          (gptel-context (list (list file-a) (list file-b)))
          (gptel-plus--context-cost nil)
-         (last-msg nil))
+         (last-msg nil)
+         (removed-files nil))
     (with-current-buffer (get-buffer-create "*gptel context files*")
       (gptel-context-files-mode)
       (let ((inhibit-read-only t))
@@ -991,11 +992,17 @@ This final sentence puts us over one hundred words."
           (put-text-property start (+ start 3) 'gptel-flag nil)))
       (cl-letf (((symbol-function 'message)
                  (lambda (fmt &rest args) (setq last-msg (apply #'format fmt args))))
+                ((symbol-function 'gptel-context-remove)
+                 (lambda (file)
+                   (push file removed-files)
+                   (setq gptel-context
+                         (cl-delete file gptel-context :key #'car :test #'equal))))
                 ((symbol-function 'gptel-plus-refresh-context-files-buffer) #'ignore))
         (gptel-plus-remove-flagged-context-files))
-      ;; file-a removed, file-b remains
+      ;; file-a removed via gptel-context-remove, file-b remains
       (should (= (length gptel-context) 1))
       (should (equal (caar gptel-context) file-b))
+      (should (equal removed-files (list file-a)))
       (should (string-match-p "file-a" last-msg))
       (kill-buffer))))
 
