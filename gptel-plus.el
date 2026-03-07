@@ -338,9 +338,30 @@ Finds the last `usageMetadata' block, which has cumulative totals."
             :output-tokens output-tokens
             :model nil))))
 
+(defun gptel-plus--compute-request-cost (tokens backend-type input-cost-per-1m output-cost-per-1m)
+  "Compute the raw cost of a request before normalization.
+TOKENS is a plist from the extraction functions.
+BACKEND-TYPE is `anthropic', `openai', or `gemini'.
+INPUT-COST-PER-1M and OUTPUT-COST-PER-1M are per-million-token rates."
+  (let ((input-tokens (plist-get tokens :input-tokens))
+        (output-tokens (plist-get tokens :output-tokens)))
+    (+ (* input-tokens input-cost-per-1m)
+       (* output-tokens output-cost-per-1m)
+       (pcase backend-type
+         ('anthropic
+          (+ (* (or (plist-get tokens :cache-creation-tokens) 0)
+                input-cost-per-1m 1.25)
+             (* (or (plist-get tokens :cache-read-tokens) 0)
+                input-cost-per-1m 0.1)))
+         ('openai
+          (* (or (plist-get tokens :cached-tokens) 0)
+             input-cost-per-1m -0.5))
+         (_ 0)))))
+
 (defun gptel-plus-calculate-exact-cost (&rest _)
   "Calculate and report the exact cost of the last `gptel' request.
-Supports Anthropic, OpenAI, and Gemini backends."
+Supports Anthropic, OpenAI, and Gemini backends.  Accounts for
+prompt caching (Anthropic and OpenAI)."
   (unwind-protect
       (when gptel-plus-calculate-cost
         (condition-case err
@@ -358,8 +379,9 @@ Supports Anthropic, OpenAI, and Gemini backends."
                               (output-cost-per-1m (get effective-model :output-cost)))
                     (message "Cost of request: $%.4f"
                              (gptel-plus-normalize-cost
-                              (+ (* input-tokens input-cost-per-1m)
-                                 (* output-tokens output-cost-per-1m))))))))
+                              (gptel-plus--compute-request-cost
+                               tokens backend-type
+                               input-cost-per-1m output-cost-per-1m)))))))
           (error (message "gptel-plus: failed to calculate cost: %s" (error-message-string err)))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)

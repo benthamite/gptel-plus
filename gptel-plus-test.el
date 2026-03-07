@@ -1386,5 +1386,59 @@ This final sentence puts us over one hundred words."
             (should (= (plist-get result :cache-read-tokens) 200))))
       (kill-buffer buf))))
 
+;;;; Cache-aware cost computation
+
+(ert-deftest gptel-plus-test-compute-request-cost-no-cache ()
+  "Basic cost computation without caching."
+  (let ((tokens '(:input-tokens 100 :output-tokens 50)))
+    (should (= (gptel-plus--compute-request-cost tokens 'openai 3.0 15.0)
+               (+ (* 100 3.0) (* 50 15.0))))))
+
+(ert-deftest gptel-plus-test-compute-request-cost-anthropic-cache ()
+  "Anthropic cache tokens use 1.25x creation and 0.1x read multipliers."
+  (let ((tokens '(:input-tokens 50 :output-tokens 75
+                  :cache-creation-tokens 100 :cache-read-tokens 200)))
+    ;; 50*3 + 75*15 + 100*3*1.25 + 200*3*0.1 = 150 + 1125 + 375 + 60 = 1710
+    (should (= (gptel-plus--compute-request-cost tokens 'anthropic 3.0 15.0)
+               1710.0))))
+
+(ert-deftest gptel-plus-test-compute-request-cost-openai-cache ()
+  "OpenAI cached tokens get a 50% discount on input cost."
+  (let ((tokens '(:input-tokens 250 :output-tokens 75 :cached-tokens 180)))
+    ;; 250*3 + 75*15 + 180*3*(-0.5) = 750 + 1125 - 270 = 1605
+    (should (= (gptel-plus--compute-request-cost tokens 'openai 3.0 15.0)
+               1605.0))))
+
+(ert-deftest gptel-plus-test-compute-request-cost-gemini-ignores-cache ()
+  "Gemini cost computation has no cache adjustment."
+  (let ((tokens '(:input-tokens 100 :output-tokens 50)))
+    (should (= (gptel-plus--compute-request-cost tokens 'gemini 3.0 15.0)
+               (+ (* 100 3.0) (* 50 15.0))))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-anthropic-cache ()
+  "Full ex post pipeline with Anthropic cache tokens."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info)
+        (gptel-model 'test-model)
+        (last-message nil))
+    (put 'test-model :input-cost 3.0)
+    (put 'test-model :output-cost 15.0)
+    (gptel-plus-test--make-log-buffer
+     (list (cons "message_start" gptel-plus-test--sample-message-start-with-cache)
+           (cons "message_delta" gptel-plus-test--sample-message-delta)))
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'anthropic))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args) (setq last-message (apply #'format fmt args)))))
+            (gptel-plus-calculate-exact-cost))
+          ;; Cost: (50*3 + 75*15 + 100*3*1.25 + 200*3*0.1) / 1M = 1710 / 1M = 0.00171
+          (should (string-match-p "\\$0\\.0017" last-message)))
+      (setplist 'test-model nil)
+      (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
 (provide 'gptel-plus-test)
 ;;; gptel-plus-test.el ends here
