@@ -229,28 +229,70 @@ Return a plist (:input-tokens N :output-tokens N :model SYM), or nil."
     ('gemini    (gptel-plus--extract-tokens-gemini))))
 
 (defun gptel-plus--extract-tokens-anthropic ()
-  "Extract token counts and model from an Anthropic response in the log buffer."
+  "Extract token counts and model from an Anthropic response in the log buffer.
+Handles both streaming (SSE events) and non-streaming (single JSON) formats.
+Returns cache token counts when prompt caching is in use."
   (goto-char (point-max))
-  (when (re-search-backward "^event: message_delta" nil t)
-    (let ((end-of-request-pos (point)))
-      (when-let* ((json (gptel-plus--read-log-event-json))
-                  (usage (cdr (assoc 'usage json)))
-                  (output-tokens (cdr (assoc 'output_tokens usage))))
-        (goto-char end-of-request-pos)
-        (when (re-search-backward "^event: message_start" nil t)
-          (when-let* ((start-json (gptel-plus--read-log-event-json))
-                      (message-data (cdr (assoc 'message start-json)))
-                      (start-usage (cdr (assoc 'usage message-data)))
-                      (input-tokens (cdr (assoc 'input_tokens start-usage)))
-                      (model-id (cdr (assoc 'model message-data)))
-                      (model-sym (intern-soft model-id)))
-            (list :input-tokens input-tokens
-                  :output-tokens output-tokens
-                  :model model-sym
-                  :cache-creation-tokens
-                  (or (cdr (assoc 'cache_creation_input_tokens start-usage)) 0)
-                  :cache-read-tokens
-                  (or (cdr (assoc 'cache_read_input_tokens start-usage)) 0))))))))
+  (cond
+   ((re-search-backward "^event: message_delta" nil t)
+    (gptel-plus--extract-tokens-anthropic-streaming))
+   ;; Only try non-streaming when no SSE events are present at all,
+   ;; to avoid matching partial streaming data.
+   ((progn (goto-char (point-min))
+           (not (re-search-forward "^event: " nil t)))
+    (gptel-plus--extract-tokens-anthropic-non-streaming))))
+
+(defun gptel-plus--extract-tokens-anthropic-streaming ()
+  "Extract tokens from an Anthropic streaming response in the log buffer."
+  (let ((end-of-request-pos (point)))
+    (when-let* ((json (gptel-plus--read-log-event-json))
+                (usage (cdr (assoc 'usage json)))
+                (output-tokens (cdr (assoc 'output_tokens usage))))
+      (goto-char end-of-request-pos)
+      (when (re-search-backward "^event: message_start" nil t)
+        (when-let* ((start-json (gptel-plus--read-log-event-json))
+                    (message-data (cdr (assoc 'message start-json)))
+                    (start-usage (cdr (assoc 'usage message-data)))
+                    (input-tokens (cdr (assoc 'input_tokens start-usage)))
+                    (model-id (cdr (assoc 'model message-data)))
+                    (model-sym (intern-soft model-id)))
+          (list :input-tokens input-tokens
+                :output-tokens output-tokens
+                :model model-sym
+                :cache-creation-tokens
+                (or (cdr (assoc 'cache_creation_input_tokens start-usage)) 0)
+                :cache-read-tokens
+                (or (cdr (assoc 'cache_read_input_tokens start-usage)) 0)))))))
+
+(defun gptel-plus--extract-tokens-anthropic-non-streaming ()
+  "Extract tokens from an Anthropic non-streaming response in the log buffer."
+  (let (input-tokens output-tokens cache-creation cache-read model-sym)
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"input_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq input-tokens (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"output_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq output-tokens (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"cache_creation_input_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq cache-creation (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"cache_read_input_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq cache-read (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"model\"[ \t\n]*:[ \t\n]*\"\\([^\"]+\\)\"" nil t)
+      (setq model-sym (intern-soft (match-string 1))))
+    (when (and input-tokens output-tokens)
+      (list :input-tokens input-tokens
+            :output-tokens output-tokens
+            :model model-sym
+            :cache-creation-tokens (or cache-creation 0)
+            :cache-read-tokens (or cache-read 0)))))
 
 (defun gptel-plus--extract-tokens-openai ()
   "Extract token counts and model from an OpenAI response in the log buffer.

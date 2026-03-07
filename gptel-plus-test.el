@@ -1344,5 +1344,47 @@ This final sentence puts us over one hundred words."
             (should (= (plist-get result :cached-tokens) 180))))
       (kill-buffer buf))))
 
+;;;; Anthropic non-streaming extraction
+
+(defconst gptel-plus-test--sample-anthropic-non-streaming
+  "{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test-model\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}],\"usage\":{\"input_tokens\":250,\"output_tokens\":75,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}"
+  "Sample Anthropic non-streaming response.")
+
+(defconst gptel-plus-test--sample-anthropic-non-streaming-with-cache
+  "{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test-model\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}],\"usage\":{\"input_tokens\":50,\"output_tokens\":75,\"cache_creation_input_tokens\":100,\"cache_read_input_tokens\":200}}"
+  "Sample Anthropic non-streaming response with cache tokens.")
+
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-non-streaming ()
+  "Extracts tokens from Anthropic non-streaming response."
+  (let ((buf (get-buffer-create "*gptel-log*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert gptel-plus-test--sample-anthropic-non-streaming))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-anthropic)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 250))
+            (should (= (plist-get result :output-tokens) 75))
+            (should (eq (plist-get result :model) 'test-model))
+            (should (= (plist-get result :cache-creation-tokens) 0))
+            (should (= (plist-get result :cache-read-tokens) 0))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-non-streaming-cache ()
+  "Extracts cache tokens from Anthropic non-streaming response."
+  (let ((buf (get-buffer-create "*gptel-log*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert gptel-plus-test--sample-anthropic-non-streaming-with-cache))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-anthropic)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 50))
+            (should (= (plist-get result :cache-creation-tokens) 100))
+            (should (= (plist-get result :cache-read-tokens) 200))))
+      (kill-buffer buf))))
+
 (provide 'gptel-plus-test)
 ;;; gptel-plus-test.el ends here
