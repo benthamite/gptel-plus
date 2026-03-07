@@ -13,6 +13,9 @@
 
 (require 'ert)
 (require 'gptel-plus)
+(require 'gptel-openai nil t)
+(require 'gptel-anthropic nil t)
+(require 'gptel-gemini nil t)
 
 ;;;; Helpers
 
@@ -351,6 +354,7 @@ This final sentence puts us over one hundred words."
 
 (ert-deftest gptel-plus-test-backend-type-openai ()
   "Detects OpenAI backend type."
+  (skip-unless (fboundp 'gptel--make-openai))
   (let ((gptel-backend (gptel--make-openai :name "test")))
     (should (eq (gptel-plus--backend-type) 'openai))))
 
@@ -764,6 +768,7 @@ This final sentence puts us over one hundred words."
 
 (ert-deftest gptel-plus-test-add-stream-options-openai ()
   "Injects stream_options for OpenAI backends when cost calculation is enabled."
+  (skip-unless (fboundp 'gptel--make-openai))
   (let ((gptel-plus-calculate-cost t)
         (gptel-stream t)
         (gptel-backend (gptel--make-openai :name "test")))
@@ -786,6 +791,7 @@ This final sentence puts us over one hundred words."
 
 (ert-deftest gptel-plus-test-add-stream-options-skips-when-disabled ()
   "Does not inject stream_options when cost calculation is disabled."
+  (skip-unless (fboundp 'gptel--make-openai))
   (let ((gptel-plus-calculate-cost nil)
         (gptel-stream t)
         (gptel-backend (gptel--make-openai :name "test")))
@@ -796,6 +802,7 @@ This final sentence puts us over one hundred words."
 
 (ert-deftest gptel-plus-test-add-stream-options-preserves-existing ()
   "Does not override existing stream_options."
+  (skip-unless (fboundp 'gptel--make-openai))
   (let ((gptel-plus-calculate-cost t)
         (gptel-stream t)
         (gptel-backend (gptel--make-openai :name "test")))
