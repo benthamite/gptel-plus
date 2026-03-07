@@ -286,23 +286,6 @@ If the cost calculation fails (e.g., due to unexpected log format changes in a n
 
 When restoring a saved context, ~gptel-plus-restore-file-context~ checks that each file exists and is readable before adding it.  If files have been moved, renamed, or deleted since the context was saved, they are skipped and a message lists the missing paths.  Update the saved context by saving it again after correcting your file paths.
 
-* Roadmap
-:PROPERTIES:
-:CUSTOM_ID: h:roadmap
-:END:
-
-The following enhancements are planned for future releases:
-
-- *Session cost accumulation.*  Track cumulative spend across a session, with a command or header line indicator to show the running total.
-
-- *Region-based context in cost estimation.*  Context added via ~gptel-context--add-region~ is currently not included in the /ex ante/ cost estimate.  The cost should account for region-based context as well as file-based context.
-
-- *Restricted and branching conversation awareness.*  When using gptel's restricted context (limited to an Org heading) or branching conversations, the /ex ante/ cost estimate should reflect only the portion of the buffer that will actually be sent.
-
-- *Auto-restore context on mode activation.*  When ~gptel-mode~ is automatically enabled (via the mode activation hooks), any saved context in the file could be restored automatically, removing the need to call ~gptel-plus-restore-file-context~ manually.
-
-- *Show actual cost in header line.*  After a request completes, the header line could display the /ex post/ cost alongside the /ex ante/ estimate, closing the feedback loop between estimated and actual spend.
-
 * Indices
 :PROPERTIES:
 :CUSTOM_ID: h:indices

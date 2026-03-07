@@ -68,8 +68,6 @@ For a comprehensive description of all user options, commands, and functions, se
 - [ ] Auto-restore context on mode activation -- restore saved context automatically when `gptel-mode` is enabled via hooks
 - [ ] Show actual cost in header line -- display the ex post cost alongside the estimate after a request completes
 
-Note: this roadmap is also present in the [manual](README.org). You may want to remove it from there to avoid duplication.
-
 ## License
 
 `gptel-plus` is licensed under the GNU General Public License v3. See [COPYING.txt](COPYING.txt) for details.
