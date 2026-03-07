@@ -23,7 +23,7 @@ The development repository is on [[https://github.com/benthamite/gptel-plus][Git
 
 The package provides four groups of functionality:
 
-- *Cost estimation and tracking.*  Before sending a request, =gptel-plus= estimates its cost and displays it in the header line.  After a request completes, it parses the response log to report the exact cost.  When a request exceeds a configurable cost threshold, it asks for confirmation before proceeding ([[#h:cost-estimation][Cost estimation]]).
+- *Cost estimation and tracking.*  Before sending a request, =gptel-plus= estimates its cost and displays it in the header line.  After a request completes, it parses the response log to report the exact cost.  When a request exceeds a configurable cost threshold, it asks for confirmation before proceeding ([[#h:cost-estimation][Cost estimation]]).  A public API is also available for computing costs programmatically from ~gptel-request~ callbacks ([[#h:programmatic-cost-api][Programmatic cost API]]).
 
 - *Context persistence.*  The gptel context (files added via ~gptel-context-add-file~) is ephemeral by default: it is lost when you kill the buffer.  =gptel-plus= can save and restore context to and from the file itself, as an Org property or a Markdown file-local variable ([[#h:context-persistence][Context persistence]]).
 
@@ -148,6 +148,28 @@ The cost calculation accounts for prompt caching where applicable.  For Anthropi
 
 Before every call to ~gptel-send~, =gptel-plus= checks whether the estimated cost exceeds ~gptel-plus-cost-warning-threshold~ ([[#h:cost-estimation-parameters][Cost estimation parameters]]).  If it does, a =y-or-n-p= prompt asks you to confirm.  If you decline, a second prompt offers to clear the context (via ~gptel-context-remove-all~), since a large context is typically the reason for a high cost.  Declining both prompts cancels the request with a ~user-error~.
 
+** Programmatic cost API
+:PROPERTIES:
+:CUSTOM_ID: h:programmatic-cost-api
+:END:
+
+#+findex: gptel-plus-compute-cost
+
+The cost estimation features described above ([[#h:cost-estimation][Cost estimation]]) work automatically for interactive ~gptel-send~ calls.  For programmatic use via ~gptel-request~, =gptel-plus= provides a separate mechanism.
+
+When =gptel-plus= is loaded, it advises ~gptel--parse-response~ to capture the raw token usage from each API response into the INFO plist under the key ~:token-usage~.  This happens transparently for all requests, whether interactive or programmatic.
+
+The function ~gptel-plus-compute-cost~ takes the INFO plist passed to a ~gptel-request~ callback and returns the dollar cost as a float, or ~nil~ if usage data or model pricing is unavailable.  It handles Anthropic, OpenAI, and Gemini usage formats, including prompt caching.  An optional MODEL argument overrides the default ~gptel-model~.
+
+Example usage:
+
+#+begin_src emacs-lisp
+(gptel-request prompt
+  :callback (lambda (response info)
+              (let ((cost (gptel-plus-compute-cost info)))
+                (message "Cost: $%.4f" cost))))
+#+end_src
+
 ** Context persistence
 :PROPERTIES:
 :CUSTOM_ID: h:context-persistence
@@ -218,11 +240,14 @@ When activating ~gptel-mode~ automatically, =gptel-plus= takes care not to mark 
 :CUSTOM_ID: h:cost-computation
 :END:
 
+#+findex: gptel-plus-compute-cost
 #+findex: gptel-plus-get-total-cost
 #+findex: gptel-plus-get-input-cost
 #+findex: gptel-plus-get-output-cost
 #+findex: gptel-plus-normalize-cost
 #+findex: gptel-plus-update-context-cost
+
+The function ~gptel-plus-compute-cost~ computes the dollar cost of a ~gptel-request~ call from its INFO plist.  It accepts an optional MODEL argument (defaulting to ~gptel-model~) and returns a float, or ~nil~ if usage data or pricing is unavailable.  It handles Anthropic, OpenAI, and Gemini usage formats, including prompt caching.  See [[#h:programmatic-cost-api][Programmatic cost API]] for details and a usage example.
 
 The function ~gptel-plus-get-total-cost~ returns the estimated total cost (in dollars) of sending the current prompt, or ~nil~ if cost information is unavailable for the active model.  It combines the input and output costs and normalizes the result.  This is the function used by the header line display ([[#h:header-line-display][Header line display]]).
 
