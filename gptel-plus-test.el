@@ -1265,7 +1265,7 @@ This final sentence puts us over one hundred words."
 ;;;; Unload function
 
 (ert-deftest gptel-plus-test-unload-removes-advice ()
-  "Unload function removes all advice and hooks."
+  "Unload function removes all advice, hooks, and restores header line."
   ;; Ensure advice is present before unloading
   (advice-add 'gptel-context-add-file :after #'gptel-plus-update-context-cost)
   (advice-add 'gptel-context-remove :after #'gptel-plus-update-context-cost)
@@ -1274,8 +1274,18 @@ This final sentence puts us over one hundred words."
   (advice-add 'gptel--request-data :around #'gptel-plus--add-stream-options)
   (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
   (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
-  ;; Unload
-  (should (null (gptel-plus-unload-function)))
+  ;; Set up header line state
+  (let ((saved-original gptel-plus--original-header-line-info)
+        (saved-current gptel--header-line-info))
+    (setq gptel-plus--original-header-line-info '(:eval "original"))
+    (setq gptel--header-line-info '(:eval "gptel-plus"))
+    ;; Unload
+    (should (null (gptel-plus-unload-function)))
+    ;; Verify header line restored
+    (should (equal gptel--header-line-info '(:eval "original")))
+    ;; Restore state for remaining tests
+    (setq gptel-plus--original-header-line-info saved-original)
+    (setq gptel--header-line-info saved-current))
   ;; Verify advice removed
   (should-not (advice-member-p #'gptel-plus-update-context-cost 'gptel-context-add-file))
   (should-not (advice-member-p #'gptel-plus-update-context-cost 'gptel-context-remove))

@@ -71,6 +71,9 @@ To disable warnings, set this value to nil."
 (defvar gptel-plus--original-log-level nil
   "Original value of `gptel-log-level' before being temporarily changed.")
 
+(defvar gptel-plus--original-header-line-info nil
+  "Original value of `gptel--header-line-info' before gptel-plus replaced it.")
+
 (defvar-local gptel-plus--log-start-position nil
   "Position in `*gptel-log*' when the current request was initiated.
 Used to scope log parsing to the correct request's data.")
@@ -496,6 +499,9 @@ prompt caching (Anthropic and OpenAI)."
        'mouse-face 'highlight
        'help-echo "Select tools"))))
 
+(unless gptel-plus--original-header-line-info
+  (setq gptel-plus--original-header-line-info gptel--header-line-info))
+
 (setq gptel--header-line-info
       '(:eval
 	(let* ((model (gptel--model-name gptel-model))
@@ -770,6 +776,8 @@ Called automatically by `unload-feature'."
   (advice-remove 'gptel--request-data #'gptel-plus--add-stream-options)
   (remove-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
   (remove-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
+  (when gptel-plus--original-header-line-info
+    (setq gptel--header-line-info gptel-plus--original-header-line-info))
   nil)
 
 (provide 'gptel-plus)
