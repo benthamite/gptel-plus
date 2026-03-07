@@ -181,58 +181,133 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 
 ;;;;; ex post cost estimation
 
-;; FIXME: this only works for Anthropic. Generalize it to all major AI labs.
+(declare-function gptel-openai-p "gptel-openai")
+(declare-function gptel-anthropic-p "gptel-anthropic")
+(declare-function gptel-gemini-p "gptel-gemini")
+
+(defun gptel-plus--backend-type ()
+  "Return a symbol for the type of the current `gptel' backend.
+Returns `anthropic', `openai', `gemini', or nil for unsupported backends."
+  (cond
+   ((and (fboundp 'gptel-anthropic-p)
+         (funcall 'gptel-anthropic-p gptel-backend))
+    'anthropic)
+   ((and (fboundp 'gptel-gemini-p)
+         (funcall 'gptel-gemini-p gptel-backend))
+    'gemini)
+   ((and (fboundp 'gptel-openai-p)
+         (funcall 'gptel-openai-p gptel-backend))
+    'openai)))
+
+(defun gptel-plus--add-stream-options (orig-fn backend prompts)
+  "Around advice for `gptel--request-data' to add OpenAI stream_options.
+Injects `stream_options' so that streaming responses include token usage."
+  (let ((result (funcall orig-fn backend prompts)))
+    (when (and gptel-plus-calculate-cost
+               gptel-stream
+               (fboundp 'gptel-openai-p)
+               (funcall 'gptel-openai-p backend)
+               (not (plist-member result :stream_options)))
+      (plist-put result :stream_options '(:include_usage t)))
+    result))
+
+(advice-add 'gptel--request-data :around #'gptel-plus--add-stream-options)
+
 (defun gptel-plus--read-log-event-json ()
   "Read the JSON data line following point in the log buffer.
 Return the parsed JSON object, or nil if no data line is found."
   (when (re-search-forward "^data: \\(.*\\)" nil t)
     (json-read-from-string (match-string 1))))
 
-(defun gptel-plus--extract-output-tokens ()
-  "Extract output tokens from the last message_delta event in the log buffer.
-Return (OUTPUT-TOKENS . END-OF-REQUEST-POS), or nil."
+(defun gptel-plus--extract-request-tokens (backend-type)
+  "Extract token counts and model from the log buffer.
+BACKEND-TYPE is `anthropic', `openai', or `gemini'.
+Return a plist (:input-tokens N :output-tokens N :model SYM), or nil."
+  (pcase backend-type
+    ('anthropic (gptel-plus--extract-tokens-anthropic))
+    ('openai    (gptel-plus--extract-tokens-openai))
+    ('gemini    (gptel-plus--extract-tokens-gemini))))
+
+(defun gptel-plus--extract-tokens-anthropic ()
+  "Extract token counts and model from an Anthropic response in the log buffer."
   (goto-char (point-max))
   (when (re-search-backward "^event: message_delta" nil t)
     (let ((end-of-request-pos (point)))
       (when-let* ((json (gptel-plus--read-log-event-json))
-                  (delta (cdr (assoc 'delta json)))
-                  ((equal (cdr (assoc 'stop_reason delta)) "end_turn"))
                   (usage (cdr (assoc 'usage json)))
                   (output-tokens (cdr (assoc 'output_tokens usage))))
-        (cons output-tokens end-of-request-pos)))))
+        (goto-char end-of-request-pos)
+        (when (re-search-backward "^event: message_start" nil t)
+          (when-let* ((start-json (gptel-plus--read-log-event-json))
+                      (message-data (cdr (assoc 'message start-json)))
+                      (start-usage (cdr (assoc 'usage message-data)))
+                      (input-tokens (cdr (assoc 'input_tokens start-usage)))
+                      (model-id (cdr (assoc 'model message-data)))
+                      (model-sym (intern-soft model-id)))
+            (list :input-tokens input-tokens
+                  :output-tokens output-tokens
+                  :model model-sym)))))))
 
-(defun gptel-plus--extract-input-tokens-and-model (search-bound)
-  "Extract input tokens and model from message_start before SEARCH-BOUND.
-Return (INPUT-TOKENS . MODEL-SYMBOL), or nil."
-  (goto-char search-bound)
-  (when (re-search-backward "^event: message_start" nil t)
-    (when-let* ((json (gptel-plus--read-log-event-json))
-                (message (cdr (assoc 'message json)))
-                (usage (cdr (assoc 'usage message)))
-                (input-tokens (cdr (assoc 'input_tokens usage)))
-                (model-id (cdr (assoc 'model message)))
-                (model-sym (intern-soft model-id)))
-      (cons input-tokens model-sym))))
+(defun gptel-plus--extract-tokens-openai ()
+  "Extract token counts and model from an OpenAI response in the log buffer.
+Works for both streaming (with stream_options) and non-streaming responses."
+  (goto-char (point-max))
+  (let (input-tokens output-tokens model-sym)
+    (when (re-search-backward
+           "\"prompt_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq input-tokens (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"completion_tokens\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq output-tokens (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"model\"[ \t\n]*:[ \t\n]*\"\\([^\"]+\\)\"" nil t)
+      (setq model-sym (intern-soft (match-string 1))))
+    (when (and input-tokens output-tokens)
+      (list :input-tokens input-tokens
+            :output-tokens output-tokens
+            :model model-sym))))
+
+(defun gptel-plus--extract-tokens-gemini ()
+  "Extract token counts from a Gemini response in the log buffer.
+Finds the last `usageMetadata' block, which has cumulative totals."
+  (goto-char (point-max))
+  (let (input-tokens output-tokens)
+    (when (re-search-backward
+           "\"promptTokenCount\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq input-tokens (string-to-number (match-string 1))))
+    (goto-char (point-max))
+    (when (re-search-backward
+           "\"candidatesTokenCount\"[ \t\n]*:[ \t\n]*\\([0-9]+\\)" nil t)
+      (setq output-tokens (string-to-number (match-string 1))))
+    (when (and input-tokens output-tokens)
+      (list :input-tokens input-tokens
+            :output-tokens output-tokens
+            :model nil))))
 
 (defun gptel-plus-calculate-exact-cost (&rest _)
-  "Calculate and report the exact cost of the last `gptel' request."
+  "Calculate and report the exact cost of the last `gptel' request.
+Supports Anthropic, OpenAI, and Gemini backends."
   (unwind-protect
       (when gptel-plus-calculate-cost
         (condition-case err
             (when-let* ((log-buffer (get-buffer "*gptel-log*")))
-              (with-current-buffer log-buffer
-                (when-let* ((output-result (gptel-plus--extract-output-tokens))
-                            (output-tokens (car output-result))
-                            (input-result (gptel-plus--extract-input-tokens-and-model
-                                           (cdr output-result)))
-                            (input-tokens (car input-result))
-                            (model-sym (cdr input-result))
-                            (input-cost-per-1m (get model-sym :input-cost))
-                            (output-cost-per-1m (get model-sym :output-cost)))
-                  (message "Cost of request: $%.4f"
-                           (gptel-plus-normalize-cost
-                            (+ (* input-tokens input-cost-per-1m)
-                               (* output-tokens output-cost-per-1m)))))))
+              (let ((backend-type (gptel-plus--backend-type))
+                    (current-model gptel-model))
+                (with-current-buffer log-buffer
+                  (when-let* ((tokens (gptel-plus--extract-request-tokens backend-type))
+                              (input-tokens (plist-get tokens :input-tokens))
+                              (output-tokens (plist-get tokens :output-tokens))
+                              (model-sym (or (plist-get tokens :model) current-model))
+                              (effective-model
+                               (if (get model-sym :input-cost) model-sym current-model))
+                              (input-cost-per-1m (get effective-model :input-cost))
+                              (output-cost-per-1m (get effective-model :output-cost)))
+                    (message "Cost of request: $%.4f"
+                             (gptel-plus-normalize-cost
+                              (+ (* input-tokens input-cost-per-1m)
+                                 (* output-tokens output-cost-per-1m))))))))
           (error (message "gptel-plus: failed to calculate cost: %s" (error-message-string err)))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
@@ -607,6 +682,7 @@ Called automatically by `unload-feature'."
   (advice-remove 'gptel-context-remove #'gptel-plus-update-context-cost)
   (advice-remove 'gptel--set-with-scope #'gptel-plus--update-cost-on-model-change)
   (advice-remove 'gptel-send #'gptel-plus-confirm-when-costs-high)
+  (advice-remove 'gptel--request-data #'gptel-plus--add-stream-options)
   (remove-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
   (remove-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
   nil)

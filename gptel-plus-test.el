@@ -307,6 +307,8 @@ This final sentence puts us over one hundred words."
 
 ;;;; Ex post cost estimation (log parsing)
 
+;;;;; Test data
+
 (defconst gptel-plus-test--sample-message-start
   "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":250,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}"
   "Sample Anthropic message_start event data.")
@@ -314,6 +316,56 @@ This final sentence puts us over one hundred words."
 (defconst gptel-plus-test--sample-message-delta
   "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":75}}"
   "Sample Anthropic message_delta event data.")
+
+(defconst gptel-plus-test--sample-openai-usage-chunk
+  "data: {\"id\":\"chatcmpl-123\",\"object\":\"chat.completion.chunk\",\"model\":\"test-model\",\"choices\":[],\"usage\":{\"prompt_tokens\":250,\"completion_tokens\":75,\"total_tokens\":325}}\n\ndata: [DONE]\n"
+  "Sample OpenAI streaming response with usage (stream_options enabled).")
+
+(defconst gptel-plus-test--sample-gemini-response
+  "[{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":250,\"candidatesTokenCount\":75,\"totalTokenCount\":325}}]\n"
+  "Sample Gemini streaming response with usage metadata.")
+
+(defun gptel-plus-test--make-openai-log-buffer (content)
+  "Create a `*gptel-log*' buffer with OpenAI-format CONTENT."
+  (let ((buf (get-buffer-create "*gptel-log*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert content))
+    buf))
+
+(defun gptel-plus-test--make-gemini-log-buffer (content)
+  "Create a `*gptel-log*' buffer with Gemini-format CONTENT."
+  (let ((buf (get-buffer-create "*gptel-log*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert content))
+    buf))
+
+;;;;; Backend type detection
+
+(ert-deftest gptel-plus-test-backend-type-anthropic ()
+  "Detects Anthropic backend type."
+  (skip-unless (fboundp 'gptel--make-anthropic))
+  (let ((gptel-backend (gptel--make-anthropic :name "test")))
+    (should (eq (gptel-plus--backend-type) 'anthropic))))
+
+(ert-deftest gptel-plus-test-backend-type-openai ()
+  "Detects OpenAI backend type."
+  (let ((gptel-backend (gptel--make-openai :name "test")))
+    (should (eq (gptel-plus--backend-type) 'openai))))
+
+(ert-deftest gptel-plus-test-backend-type-gemini ()
+  "Detects Gemini backend type."
+  (skip-unless (fboundp 'gptel--make-gemini))
+  (let ((gptel-backend (gptel--make-gemini :name "test")))
+    (should (eq (gptel-plus--backend-type) 'gemini))))
+
+(ert-deftest gptel-plus-test-backend-type-nil-for-unknown ()
+  "Returns nil for unsupported backend types."
+  (let ((gptel-backend nil))
+    (should (null (gptel-plus--backend-type)))))
+
+;;;;; Shared helpers
 
 (ert-deftest gptel-plus-test-read-log-event-json ()
   "Parses JSON from a 'data: ...' line in the log buffer."
@@ -333,60 +385,188 @@ This final sentence puts us over one hundred words."
     (goto-char (point-min))
     (should (null (gptel-plus--read-log-event-json)))))
 
-(ert-deftest gptel-plus-test-extract-output-tokens ()
-  "Extracts output tokens from the last message_delta event."
+;;;;; Anthropic extraction
+
+(ert-deftest gptel-plus-test-extract-tokens-anthropic ()
+  "Extracts input tokens, output tokens, and model from Anthropic log."
   (let ((buf (gptel-plus-test--make-log-buffer
               (list (cons "message_start" gptel-plus-test--sample-message-start)
                     (cons "content_block_delta" "{\"type\":\"content_block_delta\"}")
                     (cons "message_delta" gptel-plus-test--sample-message-delta)))))
     (unwind-protect
         (with-current-buffer buf
-          (let ((result (gptel-plus--extract-output-tokens)))
+          (let ((result (gptel-plus--extract-tokens-anthropic)))
             (should result)
-            (should (= (car result) 75))
-            (should (integerp (cdr result)))))
+            (should (= (plist-get result :input-tokens) 250))
+            (should (= (plist-get result :output-tokens) 75))
+            (should (eq (plist-get result :model) 'test-model))))
       (kill-buffer buf))))
 
-(ert-deftest gptel-plus-test-extract-output-tokens-no-delta ()
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-no-delta ()
   "Returns nil when there is no message_delta event."
   (let ((buf (gptel-plus-test--make-log-buffer
               (list (cons "message_start" gptel-plus-test--sample-message-start)))))
     (unwind-protect
         (with-current-buffer buf
-          (should (null (gptel-plus--extract-output-tokens))))
+          (should (null (gptel-plus--extract-tokens-anthropic))))
       (kill-buffer buf))))
 
-(ert-deftest gptel-plus-test-extract-input-tokens-and-model ()
-  "Extracts input tokens and model symbol from message_start event."
-  (let ((buf (gptel-plus-test--make-log-buffer
-              (list (cons "message_start" gptel-plus-test--sample-message-start)
-                    (cons "message_delta" gptel-plus-test--sample-message-delta)))))
-    (unwind-protect
-        (with-current-buffer buf
-          ;; Need test-model interned
-          (let ((result (gptel-plus--extract-input-tokens-and-model (point-max))))
-            (should result)
-            (should (= (car result) 250))
-            (should (eq (cdr result) 'test-model))))
-      (kill-buffer buf))))
-
-(ert-deftest gptel-plus-test-extract-input-tokens-no-start ()
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-no-start ()
   "Returns nil when there is no message_start event."
   (let ((buf (gptel-plus-test--make-log-buffer
               (list (cons "message_delta" gptel-plus-test--sample-message-delta)))))
     (unwind-protect
         (with-current-buffer buf
-          (should (null (gptel-plus--extract-input-tokens-and-model (point-max)))))
+          (should (null (gptel-plus--extract-tokens-anthropic))))
       (kill-buffer buf))))
 
-(ert-deftest gptel-plus-test-calculate-exact-cost-full-pipeline ()
-  "Full ex post pipeline: parses log, computes cost, displays message."
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-any-stop-reason ()
+  "Extracts tokens regardless of stop_reason value."
+  (let ((buf (gptel-plus-test--make-log-buffer
+              (list (cons "message_start" gptel-plus-test--sample-message-start)
+                    (cons "message_delta"
+                          "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":50}}")))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-anthropic)))
+            (should result)
+            (should (= (plist-get result :output-tokens) 50))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-anthropic-picks-last ()
+  "When log has multiple requests, parser finds the last one."
+  (let* ((start1 "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":100,\"output_tokens\":0}}}")
+         (delta1 "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":30}}")
+         (start2 "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_02\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":200,\"output_tokens\":0}}}")
+         (delta2 "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":50}}")
+         (buf (gptel-plus-test--make-log-buffer
+               (list (cons "message_start" start1)
+                     (cons "message_delta" delta1)
+                     (cons "message_start" start2)
+                     (cons "message_delta" delta2)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-anthropic)))
+            (should result)
+            (should (= (plist-get result :output-tokens) 50))
+            (should (= (plist-get result :input-tokens) 200))))
+      (kill-buffer buf))))
+
+;;;;; OpenAI extraction
+
+(ert-deftest gptel-plus-test-extract-tokens-openai ()
+  "Extracts token counts and model from an OpenAI streaming log."
+  (let ((buf (gptel-plus-test--make-openai-log-buffer
+              gptel-plus-test--sample-openai-usage-chunk)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-openai)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 250))
+            (should (= (plist-get result :output-tokens) 75))
+            (should (eq (plist-get result :model) 'test-model))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-openai-no-usage ()
+  "Returns nil when OpenAI log has no usage data."
+  (let ((buf (gptel-plus-test--make-openai-log-buffer
+              "data: {\"id\":\"chatcmpl-123\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\ndata: [DONE]\n")))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (null (gptel-plus--extract-tokens-openai))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-openai-pretty-printed ()
+  "Extracts tokens from pretty-printed (non-streaming) OpenAI response."
+  (let ((buf (gptel-plus-test--make-openai-log-buffer
+              "{\n  \"model\": \"test-model\",\n  \"usage\": {\n    \"prompt_tokens\": 100,\n    \"completion_tokens\": 40,\n    \"total_tokens\": 140\n  }\n}\n")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-openai)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 100))
+            (should (= (plist-get result :output-tokens) 40))
+            (should (eq (plist-get result :model) 'test-model))))
+      (kill-buffer buf))))
+
+;;;;; Gemini extraction
+
+(ert-deftest gptel-plus-test-extract-tokens-gemini ()
+  "Extracts token counts from a Gemini streaming log."
+  (let ((buf (gptel-plus-test--make-gemini-log-buffer
+              gptel-plus-test--sample-gemini-response)))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-gemini)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 250))
+            (should (= (plist-get result :output-tokens) 75))
+            (should (null (plist-get result :model)))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-gemini-no-usage ()
+  "Returns nil when Gemini log has no usage metadata."
+  (let ((buf (gptel-plus-test--make-gemini-log-buffer
+              "[{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"Hi\"}]}}]}]\n")))
+    (unwind-protect
+        (with-current-buffer buf
+          (should (null (gptel-plus--extract-tokens-gemini))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-gemini-pretty-printed ()
+  "Extracts tokens from pretty-printed Gemini response."
+  (let ((buf (gptel-plus-test--make-gemini-log-buffer
+              "{\n  \"usageMetadata\": {\n    \"promptTokenCount\": 180,\n    \"candidatesTokenCount\": 60,\n    \"totalTokenCount\": 240\n  }\n}\n")))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-gemini)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 180))
+            (should (= (plist-get result :output-tokens) 60))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-tokens-gemini-multiple-chunks ()
+  "Finds the last (cumulative) usage metadata from multiple Gemini chunks."
+  (let ((buf (gptel-plus-test--make-gemini-log-buffer
+              (concat
+               "[{\"usageMetadata\":{\"promptTokenCount\":100,\"candidatesTokenCount\":10,\"totalTokenCount\":110}},"
+               "{\"usageMetadata\":{\"promptTokenCount\":100,\"candidatesTokenCount\":50,\"totalTokenCount\":150}}]\n"))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-tokens-gemini)))
+            (should result)
+            ;; Should find the LAST (cumulative) values
+            (should (= (plist-get result :input-tokens) 100))
+            (should (= (plist-get result :output-tokens) 50))))
+      (kill-buffer buf))))
+
+;;;;; Dispatch and full pipeline
+
+(ert-deftest gptel-plus-test-extract-request-tokens-dispatches ()
+  "Dispatch function routes to the correct backend extractor."
+  (let ((buf (gptel-plus-test--make-log-buffer
+              (list (cons "message_start" gptel-plus-test--sample-message-start)
+                    (cons "message_delta" gptel-plus-test--sample-message-delta)))))
+    (unwind-protect
+        (with-current-buffer buf
+          (let ((result (gptel-plus--extract-request-tokens 'anthropic)))
+            (should result)
+            (should (= (plist-get result :input-tokens) 250))))
+      (kill-buffer buf))))
+
+(ert-deftest gptel-plus-test-extract-request-tokens-nil-for-unknown ()
+  "Returns nil for unsupported backend types."
+  (with-temp-buffer
+    (should (null (gptel-plus--extract-request-tokens nil)))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-anthropic ()
+  "Full ex post pipeline for Anthropic: parses log, computes cost, displays message."
   (let ((gptel-plus-calculate-cost t)
         (gptel-plus--logging-requests-count 1)
         (gptel-plus--original-log-level nil)
         (gptel-log-level 'info)
+        (gptel-model 'test-model)
         (last-message nil))
-    ;; Set up model pricing
     (put 'test-model :input-cost 3.0)
     (put 'test-model :output-cost 15.0)
     (gptel-plus-test--make-log-buffer
@@ -395,18 +575,94 @@ This final sentence puts us over one hundred words."
            (cons "message_delta" gptel-plus-test--sample-message-delta)))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'message)
+          (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'anthropic))
+                    ((symbol-function 'message)
                      (lambda (fmt &rest args) (setq last-message (apply #'format fmt args)))))
             (gptel-plus-calculate-exact-cost))
           ;; Exact cost: (250 * 3.0 + 75 * 15.0) / 1M = (750 + 1125) / 1M = 0.001875
           (should (string-match-p "\\$0\\.0019" last-message))
-          ;; Counter decremented
           (should (= gptel-plus--logging-requests-count 0))
-          ;; Log buffer killed (last request)
           (should (null (get-buffer "*gptel-log*"))))
       (setplist 'test-model nil)
       (when-let* ((buf (get-buffer "*gptel-log*")))
         (kill-buffer buf)))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-openai ()
+  "Full ex post pipeline for OpenAI."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info)
+        (gptel-model 'test-model)
+        (last-message nil))
+    (put 'test-model :input-cost 2.5)
+    (put 'test-model :output-cost 10.0)
+    (gptel-plus-test--make-openai-log-buffer
+     gptel-plus-test--sample-openai-usage-chunk)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'openai))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args) (setq last-message (apply #'format fmt args)))))
+            (gptel-plus-calculate-exact-cost))
+          ;; Exact cost: (250 * 2.5 + 75 * 10.0) / 1M = (625 + 750) / 1M = 0.001375
+          (should (string-match-p "\\$0\\.0014" last-message))
+          (should (= gptel-plus--logging-requests-count 0)))
+      (setplist 'test-model nil)
+      (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-gemini ()
+  "Full ex post pipeline for Gemini."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info)
+        (gptel-model 'test-model)
+        (last-message nil))
+    (put 'test-model :input-cost 1.25)
+    (put 'test-model :output-cost 5.0)
+    (gptel-plus-test--make-gemini-log-buffer
+     gptel-plus-test--sample-gemini-response)
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'gemini))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args) (setq last-message (apply #'format fmt args)))))
+            (gptel-plus-calculate-exact-cost))
+          ;; Exact cost: (250 * 1.25 + 75 * 5.0) / 1M = (312.5 + 375) / 1M = 0.0006875
+          (should (string-match-p "\\$0\\.0007" last-message))
+          (should (= gptel-plus--logging-requests-count 0)))
+      (setplist 'test-model nil)
+      (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
+(ert-deftest gptel-plus-test-calculate-exact-cost-model-fallback ()
+  "Falls back to gptel-model when response model lacks pricing."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info)
+        (gptel-model 'test-model)
+        (last-message nil))
+    (put 'test-model :input-cost 3.0)
+    (put 'test-model :output-cost 15.0)
+    ;; OpenAI log with a versioned model name that has no pricing
+    (gptel-plus-test--make-openai-log-buffer
+     "data: {\"id\":\"chatcmpl-123\",\"model\":\"gpt-4o-2024-08-06\",\"choices\":[],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\n\ndata: [DONE]\n")
+    (unwind-protect
+        (progn
+          (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'openai))
+                    ((symbol-function 'message)
+                     (lambda (fmt &rest args) (setq last-message (apply #'format fmt args)))))
+            (gptel-plus-calculate-exact-cost))
+          ;; Should fall back to test-model pricing
+          (should (string-match-p "\\$0\\." last-message)))
+      (setplist 'test-model nil)
+      (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
+;;;;; Counter management, error handling, prepare
 
 (ert-deftest gptel-plus-test-calculate-exact-cost-counter-management ()
   "Counter decrements even when calculation fails."
@@ -424,41 +680,6 @@ This final sentence puts us over one hundred words."
     ;; Log level NOT restored (still have outstanding requests)
     (should (eq gptel-log-level 'info))))
 
-(ert-deftest gptel-plus-test-extract-output-tokens-wrong-stop-reason ()
-  "Returns nil when stop_reason is not end_turn."
-  (let ((buf (gptel-plus-test--make-log-buffer
-              (list (cons "message_delta"
-                          "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"output_tokens\":50}}")))))
-    (unwind-protect
-        (with-current-buffer buf
-          (should (null (gptel-plus--extract-output-tokens))))
-      (kill-buffer buf))))
-
-(ert-deftest gptel-plus-test-extract-picks-last-request ()
-  "When log has multiple requests, parser finds the last message_delta."
-  (let* ((start1 "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":100,\"output_tokens\":0}}}")
-         (delta1 "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":30}}")
-         (start2 "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_02\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":200,\"output_tokens\":0}}}")
-         (delta2 "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":50}}")
-         (buf (gptel-plus-test--make-log-buffer
-               (list (cons "message_start" start1)
-                     (cons "message_delta" delta1)
-                     (cons "message_start" start2)
-                     (cons "message_delta" delta2)))))
-    (unwind-protect
-        (with-current-buffer buf
-          ;; Should find the LAST delta (50 output tokens)
-          (let ((result (gptel-plus--extract-output-tokens)))
-            (should result)
-            (should (= (car result) 50)))
-          ;; And the corresponding start (200 input tokens)
-          (let* ((output-result (gptel-plus--extract-output-tokens))
-                 (input-result (gptel-plus--extract-input-tokens-and-model
-                                (cdr output-result))))
-            (should input-result)
-            (should (= (car input-result) 200))))
-      (kill-buffer buf))))
-
 (ert-deftest gptel-plus-test-calculate-exact-cost-error-handling ()
   "Malformed log data produces error message but does not signal."
   (let ((gptel-plus-calculate-cost t)
@@ -472,7 +693,8 @@ This final sentence puts us over one hundred words."
         (insert "event: message_delta\ndata: {invalid json!}\n")))
     (unwind-protect
         (progn
-          (cl-letf (((symbol-function 'message)
+          (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'anthropic))
+                    ((symbol-function 'message)
                      (lambda (fmt &rest args) (setq last-msg (apply #'format fmt args)))))
             ;; Should not signal - errors are caught
             (gptel-plus-calculate-exact-cost))
@@ -531,6 +753,51 @@ This final sentence puts us over one hundred words."
     (gptel-plus-prepare-cost-calculation)
     (should (= gptel-plus--logging-requests-count 0))
     (should (null gptel-log-level))))
+
+;;;;; Stream options injection
+
+(ert-deftest gptel-plus-test-add-stream-options-openai ()
+  "Injects stream_options for OpenAI backends when cost calculation is enabled."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-stream t)
+        (gptel-backend (gptel--make-openai :name "test")))
+    (let ((result (gptel-plus--add-stream-options
+                   (lambda (_b _p) '(:model "gpt-4o" :stream t))
+                   gptel-backend nil)))
+      (should (plist-member result :stream_options))
+      (should (equal (plist-get (plist-get result :stream_options) :include_usage) t)))))
+
+(ert-deftest gptel-plus-test-add-stream-options-skips-non-openai ()
+  "Does not inject stream_options for non-OpenAI backends."
+  (skip-unless (fboundp 'gptel--make-anthropic))
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-stream t)
+        (gptel-backend (gptel--make-anthropic :name "test")))
+    (let ((result (gptel-plus--add-stream-options
+                   (lambda (_b _p) '(:model "claude-3" :stream t))
+                   gptel-backend nil)))
+      (should-not (plist-member result :stream_options)))))
+
+(ert-deftest gptel-plus-test-add-stream-options-skips-when-disabled ()
+  "Does not inject stream_options when cost calculation is disabled."
+  (let ((gptel-plus-calculate-cost nil)
+        (gptel-stream t)
+        (gptel-backend (gptel--make-openai :name "test")))
+    (let ((result (gptel-plus--add-stream-options
+                   (lambda (_b _p) '(:model "gpt-4o" :stream t))
+                   gptel-backend nil)))
+      (should-not (plist-member result :stream_options)))))
+
+(ert-deftest gptel-plus-test-add-stream-options-preserves-existing ()
+  "Does not override existing stream_options."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-stream t)
+        (gptel-backend (gptel--make-openai :name "test")))
+    (let ((result (gptel-plus--add-stream-options
+                   (lambda (_b _p) '(:model "gpt-4o" :stream_options (:include_usage :json-false)))
+                   gptel-backend nil)))
+      ;; Should keep the original value
+      (should (equal (plist-get (plist-get result :stream_options) :include_usage) :json-false)))))
 
 ;;;; Security: safe-read
 
@@ -998,6 +1265,7 @@ This final sentence puts us over one hundred words."
   (advice-add 'gptel-context-remove :after #'gptel-plus-update-context-cost)
   (advice-add 'gptel--set-with-scope :after #'gptel-plus--update-cost-on-model-change)
   (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
+  (advice-add 'gptel--request-data :around #'gptel-plus--add-stream-options)
   (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
   (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
   ;; Unload
@@ -1007,6 +1275,7 @@ This final sentence puts us over one hundred words."
   (should-not (advice-member-p #'gptel-plus-update-context-cost 'gptel-context-remove))
   (should-not (advice-member-p #'gptel-plus--update-cost-on-model-change 'gptel--set-with-scope))
   (should-not (advice-member-p #'gptel-plus-confirm-when-costs-high 'gptel-send))
+  (should-not (advice-member-p #'gptel-plus--add-stream-options 'gptel--request-data))
   ;; Verify hooks removed
   (should-not (memq #'gptel-plus-calculate-exact-cost gptel-post-response-functions))
   (should-not (memq #'gptel-plus-prepare-cost-calculation gptel-post-request-hook))
@@ -1015,6 +1284,7 @@ This final sentence puts us over one hundred words."
   (advice-add 'gptel-context-remove :after #'gptel-plus-update-context-cost)
   (advice-add 'gptel--set-with-scope :after #'gptel-plus--update-cost-on-model-change)
   (advice-add 'gptel-send :before #'gptel-plus-confirm-when-costs-high)
+  (advice-add 'gptel--request-data :around #'gptel-plus--add-stream-options)
   (add-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost 100)
   (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation))
 
