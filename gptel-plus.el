@@ -25,6 +25,30 @@
 ;;; Commentary:
 
 ;; Enhancements for gptel.
+;;
+;; Cost calculation:
+;;
+;; gptel-plus provides two complementary mechanisms for computing
+;; the cost of LLM requests:
+;;
+;; 1. Automatic display for `gptel-send' (interactive chat):
+;;    Hooks into `gptel-post-response-functions' to parse the log
+;;    buffer and display cost after each response.  Controlled by
+;;    `gptel-plus-calculate-cost'.
+;;
+;; 2. Public API for `gptel-request' (programmatic use):
+;;    Advises `gptel--parse-response' to capture the raw token
+;;    usage from API responses into the INFO plist (under
+;;    `:token-usage').  External packages can then call
+;;    `gptel-plus-compute-cost' from their callbacks:
+;;
+;;      (gptel-request prompt
+;;        :callback (lambda (response info)
+;;                    (let ((cost (gptel-plus-compute-cost info)))
+;;                      (message "Cost: $%.4f" cost))))
+;;
+;;    `gptel-plus-compute-cost' handles Anthropic, OpenAI, and
+;;    Gemini usage formats, including prompt caching.
 
 ;;; Code:
 
@@ -191,6 +215,64 @@ The threshold is set via `gptel-plus-cost-warning-threshold'."
 (declare-function gptel-openai-p "gptel-openai")
 (declare-function gptel-anthropic-p "gptel-anthropic")
 (declare-function gptel-gemini-p "gptel-gemini")
+
+;;;;;; Usage capture
+
+(defun gptel-plus--capture-usage (orig-fn backend response proc-info)
+  "Around advice for `gptel--parse-response' to capture token usage.
+Extracts the usage plist from the raw API response and stores it
+in PROC-INFO under `:token-usage' before the response is stripped
+to text content.  This makes token data available to `gptel-request'
+callbacks via the INFO plist, enabling cost calculation for any
+gptel consumer (not just `gptel-send')."
+  (when-let* ((usage (or (plist-get response :usage)
+                         (plist-get response :usageMetadata))))
+    (plist-put proc-info :token-usage usage))
+  (funcall orig-fn backend response proc-info))
+
+(advice-add 'gptel--parse-response :around #'gptel-plus--capture-usage)
+
+(defun gptel-plus-compute-cost (info &optional model)
+  "Compute the dollar cost of a gptel request from its INFO plist.
+INFO is the plist passed to a `gptel-request' callback.  MODEL is the
+model symbol to look up pricing for; it defaults to `gptel-model'.
+
+Returns the cost as a float, or nil if usage data or pricing is
+unavailable.  Handles Anthropic, OpenAI, and Gemini usage formats,
+including prompt caching."
+  (let ((model (or model gptel-model)))
+    (when-let* ((usage (plist-get info :token-usage))
+                (input-rate (get model :input-cost))
+                (output-rate (get model :output-cost)))
+      (let (input-tokens output-tokens cache-adj)
+        (cond
+         ;; Anthropic: :input_tokens, :output_tokens
+         ((plist-member usage :input_tokens)
+          (setq input-tokens (plist-get usage :input_tokens)
+                output-tokens (or (plist-get usage :output_tokens) 0)
+                cache-adj (+ (* (or (plist-get usage :cache_creation_input_tokens) 0)
+                                input-rate 1.25)
+                             (* (or (plist-get usage :cache_read_input_tokens) 0)
+                                input-rate 0.1))))
+         ;; OpenAI: :prompt_tokens, :completion_tokens
+         ((plist-member usage :prompt_tokens)
+          (setq input-tokens (plist-get usage :prompt_tokens)
+                output-tokens (or (plist-get usage :completion_tokens) 0)
+                cache-adj (* (or (when-let* ((d (plist-get usage :prompt_tokens_details)))
+                                   (plist-get d :cached_tokens))
+                                 0)
+                             input-rate -0.5)))
+         ;; Gemini: :promptTokenCount, :candidatesTokenCount
+         ((plist-member usage :promptTokenCount)
+          (setq input-tokens (plist-get usage :promptTokenCount)
+                output-tokens (or (plist-get usage :candidatesTokenCount) 0)
+                cache-adj 0))
+         (t (setq input-tokens 0 output-tokens 0 cache-adj 0)))
+        (when (> (+ input-tokens output-tokens) 0)
+          (/ (+ (* input-tokens input-rate)
+                (* output-tokens output-rate)
+                (or cache-adj 0))
+             1000000.0))))))
 
 (defun gptel-plus--backend-type ()
   "Return a symbol for the type of the current `gptel' backend.
@@ -768,6 +850,7 @@ Called automatically by `unload-feature'."
   (advice-remove 'gptel--set-with-scope #'gptel-plus--update-cost-on-model-change)
   (advice-remove 'gptel-send #'gptel-plus-confirm-when-costs-high)
   (advice-remove 'gptel--request-data #'gptel-plus--add-stream-options)
+  (advice-remove 'gptel--parse-response #'gptel-plus--capture-usage)
   (remove-hook 'gptel-post-response-functions #'gptel-plus-calculate-exact-cost)
   (remove-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
   (when gptel-plus--original-header-line-info

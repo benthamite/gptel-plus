@@ -1525,5 +1525,154 @@ This final sentence puts us over one hundred words."
             (should (= gptel-plus--log-start-position expected-pos)))
         (kill-buffer buf)))))
 
+;;;; Usage capture and public cost API
+
+(ert-deftest gptel-plus-test-capture-usage-anthropic ()
+  "Advice captures Anthropic :usage from response into proc-info."
+  (let ((proc-info (list :buffer (current-buffer)))
+        (response '(:id "msg_01" :type "message" :role "assistant"
+                    :model "claude-sonnet-4-5-20250514"
+                    :content [(:type "text" :text "Hello")]
+                    :usage (:input_tokens 250 :output_tokens 75
+                            :cache_creation_input_tokens 0
+                            :cache_read_input_tokens 0))))
+    (gptel-plus--capture-usage #'ignore nil response proc-info)
+    (let ((usage (plist-get proc-info :token-usage)))
+      (should usage)
+      (should (= (plist-get usage :input_tokens) 250))
+      (should (= (plist-get usage :output_tokens) 75)))))
+
+(ert-deftest gptel-plus-test-capture-usage-openai ()
+  "Advice captures OpenAI :usage from response into proc-info."
+  (let ((proc-info (list :buffer (current-buffer)))
+        (response '(:id "chatcmpl-01" :object "chat.completion"
+                    :choices [(:message (:content "Hello"))]
+                    :usage (:prompt_tokens 100 :completion_tokens 50
+                            :total_tokens 150))))
+    (gptel-plus--capture-usage #'ignore nil response proc-info)
+    (let ((usage (plist-get proc-info :token-usage)))
+      (should usage)
+      (should (= (plist-get usage :prompt_tokens) 100))
+      (should (= (plist-get usage :completion_tokens) 50)))))
+
+(ert-deftest gptel-plus-test-capture-usage-gemini ()
+  "Advice captures Gemini :usageMetadata from response into proc-info."
+  (let ((proc-info (list :buffer (current-buffer)))
+        (response '(:candidates [(:content (:parts [(:text "Hello")]))]
+                    :usageMetadata (:promptTokenCount 200
+                                    :candidatesTokenCount 80
+                                    :totalTokenCount 280))))
+    (gptel-plus--capture-usage #'ignore nil response proc-info)
+    (let ((usage (plist-get proc-info :token-usage)))
+      (should usage)
+      (should (= (plist-get usage :promptTokenCount) 200))
+      (should (= (plist-get usage :candidatesTokenCount) 80)))))
+
+(ert-deftest gptel-plus-test-capture-usage-calls-orig ()
+  "Advice calls the original function and returns its result."
+  (let ((proc-info (list :buffer (current-buffer)))
+        (response '(:usage (:input_tokens 1 :output_tokens 1)))
+        (called nil))
+    (gptel-plus--capture-usage
+     (lambda (_b _r _p) (setq called t) "result")
+     nil response proc-info)
+    (should called)))
+
+(ert-deftest gptel-plus-test-compute-cost-anthropic ()
+  "Compute cost from Anthropic usage data."
+  (let ((gptel-model 'gptel-plus-test--model)
+        (info (list :token-usage
+                    '(:input_tokens 1000 :output_tokens 500
+                      :cache_creation_input_tokens 0
+                      :cache_read_input_tokens 0))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        ;; (1000*3 + 500*15 + 0 + 0) / 1M = 10500 / 1M = 0.0105
+        (should (< (abs (- (gptel-plus-compute-cost info) 0.0105)) 1e-10))
+      (setplist 'gptel-plus-test--model nil))))
+
+(ert-deftest gptel-plus-test-compute-cost-anthropic-cache ()
+  "Compute cost with Anthropic cache tokens."
+  (let ((gptel-model 'gptel-plus-test--model)
+        (info (list :token-usage
+                    '(:input_tokens 50 :output_tokens 75
+                      :cache_creation_input_tokens 100
+                      :cache_read_input_tokens 200))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        ;; (50*3 + 75*15 + 100*3*1.25 + 200*3*0.1) / 1M = 1710 / 1M
+        (should (< (abs (- (gptel-plus-compute-cost info) 0.00171)) 1e-10))
+      (setplist 'gptel-plus-test--model nil))))
+
+(ert-deftest gptel-plus-test-compute-cost-openai ()
+  "Compute cost from OpenAI usage data."
+  (let ((gptel-model 'gptel-plus-test--model)
+        (info (list :token-usage
+                    '(:prompt_tokens 250 :completion_tokens 75
+                      :total_tokens 325))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        ;; (250*3 + 75*15) / 1M = 1875 / 1M
+        (should (< (abs (- (gptel-plus-compute-cost info) 0.001875)) 1e-10))
+      (setplist 'gptel-plus-test--model nil))))
+
+(ert-deftest gptel-plus-test-compute-cost-openai-cached ()
+  "Compute cost from OpenAI usage with cached tokens."
+  (let ((gptel-model 'gptel-plus-test--model)
+        (info (list :token-usage
+                    '(:prompt_tokens 250 :completion_tokens 75
+                      :prompt_tokens_details (:cached_tokens 180)))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        ;; (250*3 + 75*15 + 180*3*(-0.5)) / 1M = 1605 / 1M
+        (should (< (abs (- (gptel-plus-compute-cost info) 0.001605)) 1e-10))
+      (setplist 'gptel-plus-test--model nil))))
+
+(ert-deftest gptel-plus-test-compute-cost-gemini ()
+  "Compute cost from Gemini usage data."
+  (let ((gptel-model 'gptel-plus-test--model)
+        (info (list :token-usage
+                    '(:promptTokenCount 200 :candidatesTokenCount 80
+                      :totalTokenCount 280))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        ;; (200*3 + 80*15) / 1M = 1800 / 1M
+        (should (< (abs (- (gptel-plus-compute-cost info) 0.0018)) 1e-10))
+      (setplist 'gptel-plus-test--model nil))))
+
+(ert-deftest gptel-plus-test-compute-cost-nil-without-usage ()
+  "Returns nil when info has no :token-usage."
+  (let ((gptel-model 'gptel-plus-test--model)
+        (info (list :buffer (current-buffer))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        (should-not (gptel-plus-compute-cost info))
+      (setplist 'gptel-plus-test--model nil))))
+
+(ert-deftest gptel-plus-test-compute-cost-nil-without-pricing ()
+  "Returns nil when model has no pricing properties."
+  (let ((gptel-model 'model-without-pricing)
+        (info (list :token-usage '(:input_tokens 100 :output_tokens 50))))
+    (should-not (gptel-plus-compute-cost info))))
+
+(ert-deftest gptel-plus-test-compute-cost-explicit-model ()
+  "Uses explicit MODEL argument over gptel-model."
+  (let ((gptel-model 'wrong-model)
+        (info (list :token-usage
+                    '(:input_tokens 1000 :output_tokens 500))))
+    (put 'gptel-plus-test--model :input-cost 3.0)
+    (put 'gptel-plus-test--model :output-cost 15.0)
+    (unwind-protect
+        (should (< (abs (- (gptel-plus-compute-cost info 'gptel-plus-test--model)
+                           0.0105))
+                   1e-10))
+      (setplist 'gptel-plus-test--model nil))))
+
 (provide 'gptel-plus-test)
 ;;; gptel-plus-test.el ends here
