@@ -342,16 +342,16 @@ Returns cache token counts when prompt caching is in use."
         (when-let* ((start-json (gptel-plus--read-log-event-json))
                     (message-data (cdr (assoc 'message start-json)))
                     (start-usage (cdr (assoc 'usage message-data)))
-                    (input-tokens (cdr (assoc 'input_tokens start-usage)))
-                    (model-id (cdr (assoc 'model message-data)))
-                    (model-sym (intern-soft model-id)))
-          (list :input-tokens input-tokens
-                :output-tokens output-tokens
-                :model model-sym
-                :cache-creation-tokens
-                (or (cdr (assoc 'cache_creation_input_tokens start-usage)) 0)
-                :cache-read-tokens
-                (or (cdr (assoc 'cache_read_input_tokens start-usage)) 0)))))))
+                    (input-tokens (cdr (assoc 'input_tokens start-usage))))
+          (let* ((model-id (cdr (assoc 'model message-data)))
+                 (model-sym (and model-id (intern-soft model-id))))
+            (list :input-tokens input-tokens
+                  :output-tokens output-tokens
+                  :model model-sym
+                  :cache-creation-tokens
+                  (or (cdr (assoc 'cache_creation_input_tokens start-usage)) 0)
+                  :cache-read-tokens
+                  (or (cdr (assoc 'cache_read_input_tokens start-usage)) 0))))))))
 
 (defun gptel-plus--extract-tokens-anthropic-non-streaming ()
   "Extract tokens from an Anthropic non-streaming response in the log buffer."
@@ -575,7 +575,7 @@ prompt caching (Anthropic and OpenAI)."
 				 (lambda () (call-interactively #'gptel-tools))))))
       (propertize
        (buttonize (pcase (length gptel-tools)
-		    (0 "[No tools]") (1 "[1 tool]")
+		    (1 "[1 tool]")
 		    (len (format "[%d tools]" len)))
 		  toggle)
        'mouse-face 'highlight
@@ -598,7 +598,9 @@ prompt caching (Anthropic and OpenAI)."
             `(space :align-to (- right
 				 ,(+ 5 (length model) (length system)
                                      (length track-media) (length context)
-				     (length cost) (length tools)))))
+				     (length cost) (length tools)
+				     (if track-media 1 0)
+				     (if context 1 0)))))
 	   tools (and track-media " ") track-media (and context " ") context " " cost " " system " "
 	   (propertize
             (buttonize (concat "[" model "]")
