@@ -137,9 +137,9 @@ After each gptel request completes, =gptel-plus= reports the exact cost in the e
 
 To obtain the exact token counts, =gptel-plus= temporarily sets ~gptel-log-level~ to ~info~ before the request is sent, which causes gptel to log the full request and response data to the =*gptel-log*= buffer.  After the response arrives, =gptel-plus= parses this log to extract the input and output token counts, computes the cost using the model's pricing, and then restores the original log level and kills the log buffer.
 
-This mechanism handles concurrent requests correctly: if multiple requests are in flight simultaneously, the log level is only restored after the last one completes.
+This mechanism handles concurrent requests correctly: if multiple requests are in flight simultaneously, the log level is only restored after the last one completes.  Each request's log data is parsed in isolation (scoped to the region of the log buffer written during that request), so concurrent requests from different buffers do not interfere with each other.
 
-*Note:* This feature currently works only with Anthropic models, because it relies on the Anthropic streaming event format (=message_start= and =message_delta= events).  For other providers, the /ex ante/ estimate is still available.
+The cost calculation accounts for prompt caching where applicable.  For Anthropic, cache creation tokens are charged at 1.25× the input rate and cache read tokens at 0.1× the input rate.  For OpenAI, cached tokens receive a 50% discount on the input rate.  Both streaming and non-streaming responses are supported for all three providers.
 
 *** Cost warning
 :PROPERTIES:
@@ -275,7 +275,7 @@ The header line displays =[Cost: N/A]= when the current model does not have ~:in
 :CUSTOM_ID: h:ex-post-cost-not-reported
 :END:
 
-The /ex post/ cost calculation currently works only with Anthropic models.  For other providers, the echo area message will not appear.  The /ex ante/ estimate in the header line is provider-agnostic and works for any model that has pricing properties set.
+The /ex post/ cost calculation supports Anthropic, OpenAI, and Gemini backends, in both streaming and non-streaming modes.  If the echo area message does not appear, check that the model has ~:input-cost~ and ~:output-cost~ properties set and that ~gptel-plus-calculate-cost~ is non-nil.
 
 If the cost calculation fails (e.g., due to unexpected log format changes in a new gptel version), a message of the form =gptel-plus: failed to calculate cost: ...= will appear in the echo area instead of silently failing.
 
@@ -285,6 +285,23 @@ If the cost calculation fails (e.g., due to unexpected log format changes in a n
 :END:
 
 When restoring a saved context, ~gptel-plus-restore-file-context~ checks that each file exists and is readable before adding it.  If files have been moved, renamed, or deleted since the context was saved, they are skipped and a message lists the missing paths.  Update the saved context by saving it again after correcting your file paths.
+
+* Roadmap
+:PROPERTIES:
+:CUSTOM_ID: h:roadmap
+:END:
+
+The following enhancements are planned for future releases:
+
+- *Session cost accumulation.*  Track cumulative spend across a session, with a command or header line indicator to show the running total.
+
+- *Region-based context in cost estimation.*  Context added via ~gptel-context--add-region~ is currently not included in the /ex ante/ cost estimate.  The cost should account for region-based context as well as file-based context.
+
+- *Restricted and branching conversation awareness.*  When using gptel's restricted context (limited to an Org heading) or branching conversations, the /ex ante/ cost estimate should reflect only the portion of the buffer that will actually be sent.
+
+- *Auto-restore context on mode activation.*  When ~gptel-mode~ is automatically enabled (via the mode activation hooks), any saved context in the file could be restored automatically, removing the need to call ~gptel-plus-restore-file-context~ manually.
+
+- *Show actual cost in header line.*  After a request completes, the header line could display the /ex post/ cost alongside the /ex ante/ estimate, closing the feedback loop between estimated and actual spend.
 
 * Indices
 :PROPERTIES:
