@@ -726,15 +726,18 @@ This final sentence puts us over one hundred words."
         (kill-buffer buf)))))
 
 (ert-deftest gptel-plus-test-prepare-cost-calculation ()
-  "Prepare saves original log level and increments counter."
+  "Prepare saves original log level, increments counter, and records log position."
   (let ((gptel-plus-calculate-cost t)
         (gptel-plus--logging-requests-count 0)
         (gptel-plus--original-log-level nil)
         (gptel-log-level nil))
+    (when-let* ((buf (get-buffer "*gptel-log*")))
+      (kill-buffer buf))
     (gptel-plus-prepare-cost-calculation)
     (should (= gptel-plus--logging-requests-count 1))
     (should (null gptel-plus--original-log-level))
-    (should (eq gptel-log-level 'info))))
+    (should (eq gptel-log-level 'info))
+    (should (= gptel-plus--log-start-position 1))))
 
 (ert-deftest gptel-plus-test-prepare-cost-calculation-concurrent ()
   "Second prepare increments counter but preserves original log level."
@@ -1438,6 +1441,64 @@ This final sentence puts us over one hundred words."
           (should (string-match-p "\\$0\\.0017" last-message)))
       (setplist 'test-model nil)
       (when-let* ((buf (get-buffer "*gptel-log*")))
+        (kill-buffer buf)))))
+
+;;;; Log position isolation
+
+(ert-deftest gptel-plus-test-log-position-isolates-requests ()
+  "Log narrowing ensures only the current request's data is parsed."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 1)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level 'info)
+        (gptel-model 'test-model)
+        (last-message nil))
+    (put 'test-model :input-cost 3.0)
+    (put 'test-model :output-cost 15.0)
+    ;; Create log with a first request
+    (let ((buf (gptel-plus-test--make-log-buffer
+                (list (cons "message_start"
+                            "{\"type\":\"message_start\",\"message\":{\"id\":\"msg_01\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"model\":\"test-model\",\"stop_reason\":null,\"usage\":{\"input_tokens\":9999,\"output_tokens\":0,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}")
+                      (cons "message_delta"
+                            "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":9999}}")))))
+      ;; Record position after first request
+      (let ((gptel-plus--log-start-position
+             (with-current-buffer buf (point-max))))
+        ;; Append a second request
+        (with-current-buffer buf
+          (goto-char (point-max))
+          (insert (format "event: message_start\ndata: %s\n\n"
+                          gptel-plus-test--sample-message-start))
+          (insert (format "event: message_delta\ndata: %s\n\n"
+                          gptel-plus-test--sample-message-delta)))
+        (unwind-protect
+            (progn
+              (cl-letf (((symbol-function 'gptel-plus--backend-type) (lambda () 'anthropic))
+                        ((symbol-function 'message)
+                         (lambda (fmt &rest args) (setq last-message (apply #'format fmt args)))))
+                (gptel-plus-calculate-exact-cost))
+              ;; Should parse the SECOND request (250 input, 75 output), not the first (9999)
+              ;; Cost: (250*3 + 75*15) / 1M = 1875 / 1M = 0.001875
+              (should (string-match-p "\\$0\\.0019" last-message)))
+          (setplist 'test-model nil)
+          (when-let* ((b (get-buffer "*gptel-log*")))
+            (kill-buffer b)))))))
+
+(ert-deftest gptel-plus-test-prepare-saves-log-position ()
+  "Prepare records current log buffer end position."
+  (let ((gptel-plus-calculate-cost t)
+        (gptel-plus--logging-requests-count 0)
+        (gptel-plus--original-log-level nil)
+        (gptel-log-level nil))
+    ;; Create a log buffer with existing content
+    (let ((buf (get-buffer-create "*gptel-log*")))
+      (with-current-buffer buf
+        (erase-buffer)
+        (insert "existing log data\n"))
+      (unwind-protect
+          (let ((expected-pos (with-current-buffer buf (point-max))))
+            (gptel-plus-prepare-cost-calculation)
+            (should (= gptel-plus--log-start-position expected-pos)))
         (kill-buffer buf)))))
 
 (provide 'gptel-plus-test)

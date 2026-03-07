@@ -71,6 +71,10 @@ To disable warnings, set this value to nil."
 (defvar gptel-plus--original-log-level nil
   "Original value of `gptel-log-level' before being temporarily changed.")
 
+(defvar-local gptel-plus--log-start-position nil
+  "Position in `*gptel-log*' when the current request was initiated.
+Used to scope log parsing to the correct request's data.")
+
 ;;;;; ex ante cost estimation
 
 ;; TODO: estimate cost added via `gptel-context--add-region'
@@ -367,21 +371,24 @@ prompt caching (Anthropic and OpenAI)."
         (condition-case err
             (when-let* ((log-buffer (get-buffer "*gptel-log*")))
               (let ((backend-type (gptel-plus--backend-type))
-                    (current-model gptel-model))
+                    (current-model gptel-model)
+                    (log-start (or gptel-plus--log-start-position 1)))
                 (with-current-buffer log-buffer
-                  (when-let* ((tokens (gptel-plus--extract-request-tokens backend-type))
-                              (input-tokens (plist-get tokens :input-tokens))
-                              (output-tokens (plist-get tokens :output-tokens))
-                              (model-sym (or (plist-get tokens :model) current-model))
-                              (effective-model
-                               (if (get model-sym :input-cost) model-sym current-model))
-                              (input-cost-per-1m (get effective-model :input-cost))
-                              (output-cost-per-1m (get effective-model :output-cost)))
-                    (message "Cost of request: $%.4f"
-                             (gptel-plus-normalize-cost
-                              (gptel-plus--compute-request-cost
-                               tokens backend-type
-                               input-cost-per-1m output-cost-per-1m)))))))
+                  (save-restriction
+                    (narrow-to-region (min log-start (point-max)) (point-max))
+                    (when-let* ((tokens (gptel-plus--extract-request-tokens backend-type))
+                                (input-tokens (plist-get tokens :input-tokens))
+                                (output-tokens (plist-get tokens :output-tokens))
+                                (model-sym (or (plist-get tokens :model) current-model))
+                                (effective-model
+                                 (if (get model-sym :input-cost) model-sym current-model))
+                                (input-cost-per-1m (get effective-model :input-cost))
+                                (output-cost-per-1m (get effective-model :output-cost)))
+                      (message "Cost of request: $%.4f"
+                               (gptel-plus-normalize-cost
+                                (gptel-plus--compute-request-cost
+                                 tokens backend-type
+                                 input-cost-per-1m output-cost-per-1m))))))))
           (error (message "gptel-plus: failed to calculate cost: %s" (error-message-string err)))))
     (cl-decf gptel-plus--logging-requests-count)
     (when (<= gptel-plus--logging-requests-count 0)
@@ -398,7 +405,11 @@ prompt caching (Anthropic and OpenAI)."
     (when (= gptel-plus--logging-requests-count 0)
       (setq gptel-plus--original-log-level gptel-log-level))
     (setq gptel-log-level 'info)
-    (cl-incf gptel-plus--logging-requests-count)))
+    (cl-incf gptel-plus--logging-requests-count)
+    (setq-local gptel-plus--log-start-position
+                (if-let* ((buf (get-buffer "*gptel-log*")))
+                    (with-current-buffer buf (point-max))
+                  1))))
 
 (add-hook 'gptel-post-request-hook #'gptel-plus-prepare-cost-calculation)
 
