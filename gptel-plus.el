@@ -592,21 +592,21 @@ prompt caching (Anthropic and OpenAI)."
 	       (context (gptel-plus--header-context-info))
 	       (track-media (gptel-plus--header-media-button))
 	       (tools (gptel-plus--header-tools-button)))
-	  (concat
-	   (propertize
-            " " 'display
-            `(space :align-to (- right
-				 ,(+ 5 (length model) (length system)
-                                     (length track-media) (length context)
-				     (length cost) (length tools)
-				     (if track-media 1 0)
-				     (if context 1 0)))))
-	   tools (and track-media " ") track-media (and context " ") context " " cost " " system " "
-	   (propertize
-            (buttonize (concat "[" model "]")
-                       (lambda (&rest _) (gptel-menu)))
-            'mouse-face 'highlight
-            'help-echo "Model in use")))))
+	  (let ((rhs (concat
+		      tools (and track-media " ") track-media
+		      (and context " ") context " " cost " " system " "
+		      (propertize
+		       (buttonize (concat "[" model "]")
+				  (lambda (&rest _) (gptel-menu)))
+		       'mouse-face 'highlight
+		       'help-echo "Model in use"))))
+	    (concat
+	     (propertize
+	      " " 'display
+	      (if (fboundp 'string-pixel-width)
+		  `(space :align-to (- right (,(string-pixel-width rhs))))
+		`(space :align-to (- right ,(+ 5 (string-width rhs))))))
+	     rhs)))))
 
 ;;;;; Automatic mode activation
 

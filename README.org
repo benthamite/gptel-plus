@@ -119,6 +119,8 @@ Cost estimation in =gptel-plus= has two complementary aspects: an /ex ante/ esti
 
 When =gptel-plus= is loaded, it replaces the standard gptel header line with an extended version that includes a clickable =[Cost: $X.XX]= indicator.  This indicator shows the estimated cost of sending the current prompt, updated dynamically as you type or modify the context.  Clicking the cost indicator opens the gptel transient menu.
 
+The header line uses pixel-level alignment when available (Emacs 29+), falling back to character-width alignment on older builds.
+
 The estimate accounts for three components:
 
 1. The words in the current buffer (from the beginning up to point, or in the active region if one exists).
