@@ -20,24 +20,25 @@ The package provides four groups of functionality:
 
 `gptel-plus` requires Emacs 29.1 or later and [gptel](https://github.com/karthink/gptel) 0.7.1 or later.
 
-**package-vc** (built-in since Emacs 29):
-
-```emacs-lisp
-(package-vc-install "https://github.com/benthamite/gptel-plus")
-```
-
-**Elpaca**:
+### package-vc (built-in since Emacs 30)
 
 ```emacs-lisp
 (use-package gptel-plus
-  :ensure (gptel-plus :host github :repo "benthamite/gptel-plus"))
+  :vc (:url "https://github.com/benthamite/gptel-plus"))
 ```
 
-**straight.el**:
+### Elpaca
 
 ```emacs-lisp
-(straight-use-package
- '(gptel-plus :type git :host github :repo "benthamite/gptel-plus"))
+(use-package gptel-plus
+  :ensure (:host github :repo "benthamite/gptel-plus"))
+```
+
+### straight.el
+
+```emacs-lisp
+(use-package gptel-plus
+  :straight (:host github :repo "benthamite/gptel-plus"))
 ```
 
 ## Quick start
