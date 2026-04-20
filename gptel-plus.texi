@@ -4,6 +4,7 @@
 @settitle gptel-plus: Enhancements for gptel
 @documentencoding UTF-8
 @documentlanguage en
+@c AUTO-GENERATED from README.org via ox-texinfo — do not edit manually.
 @c %**end of header
 
 @dircategory Emacs misc features
@@ -51,6 +52,7 @@ User options
 Commands
 
 * Cost estimation::
+* Programmatic cost API::
 * Context persistence::
 * Context file management::
 * Automatic mode activation::
@@ -92,7 +94,7 @@ The package provides four groups of functionality:
 
 @itemize
 @item
-@strong{Cost estimation and tracking.}  Before sending a request, @samp{gptel-plus} estimates its cost and displays it in the header line.  After a request completes, it parses the response log to report the exact cost.  When a request exceeds a configurable cost threshold, it asks for confirmation before proceeding (@ref{Cost estimation}).
+@strong{Cost estimation and tracking.}  Before sending a request, @samp{gptel-plus} estimates its cost and displays it in the header line.  After a request completes, it parses the response log to report the exact cost.  When a request exceeds a configurable cost threshold, it asks for confirmation before proceeding (@ref{Cost estimation}).  A public API is also available for computing costs programmatically from @code{gptel-request} callbacks (@ref{Programmatic cost API}).
 
 @item
 @strong{Context persistence.}  The gptel context (files added via @code{gptel-context-add-file}) is ephemeral by default: it is lost when you kill the buffer.  @samp{gptel-plus} can save and restore context to and from the file itself, as an Org property or a Markdown file-local variable (@ref{Context persistence}).
@@ -176,6 +178,7 @@ The user option @code{gptel-plus-cost-warning-threshold} sets the dollar amount 
 
 @menu
 * Cost estimation::
+* Programmatic cost API::
 * Context persistence::
 * Context file management::
 * Automatic mode activation::
@@ -196,6 +199,8 @@ Cost estimation in @samp{gptel-plus} has two complementary aspects: an @emph{ex 
 @subsection Header line display
 
 When @samp{gptel-plus} is loaded, it replaces the standard gptel header line with an extended version that includes a clickable @samp{[Cost: $X.XX]} indicator.  This indicator shows the estimated cost of sending the current prompt, updated dynamically as you type or modify the context.  Clicking the cost indicator opens the gptel transient menu.
+
+The header line uses pixel-level alignment when available (Emacs 29+), falling back to character-width alignment on older builds.
 
 The estimate accounts for three components:
 
@@ -219,14 +224,34 @@ After each gptel request completes, @samp{gptel-plus} reports the exact cost in 
 
 To obtain the exact token counts, @samp{gptel-plus} temporarily sets @code{gptel-log-level} to @code{info} before the request is sent, which causes gptel to log the full request and response data to the @samp{*gptel-log*} buffer.  After the response arrives, @samp{gptel-plus} parses this log to extract the input and output token counts, computes the cost using the model's pricing, and then restores the original log level and kills the log buffer.
 
-This mechanism handles concurrent requests correctly: if multiple requests are in flight simultaneously, the log level is only restored after the last one completes.
+This mechanism handles concurrent requests correctly: if multiple requests are in flight simultaneously, the log level is only restored after the last one completes.  Each request's log data is parsed in isolation (scoped to the region of the log buffer written during that request), so concurrent requests from different buffers do not interfere with each other.
 
-@strong{Note:} This feature currently works only with Anthropic models, because it relies on the Anthropic streaming event format (@samp{message_start} and @samp{message_delta} events).  For other providers, the @emph{ex ante} estimate is still available.
+The cost calculation accounts for prompt caching where applicable.  For Anthropic, cache creation tokens are charged at 1.25× the input rate and cache read tokens at 0.1× the input rate.  For OpenAI, cached tokens receive a 50% discount on the input rate.  Both streaming and non-streaming responses are supported for all three providers.
 
 @node Cost warning
 @subsection Cost warning
 
 Before every call to @code{gptel-send}, @samp{gptel-plus} checks whether the estimated cost exceeds @code{gptel-plus-cost-warning-threshold} (@ref{Cost estimation parameters}).  If it does, a @samp{y-or-n-p} prompt asks you to confirm.  If you decline, a second prompt offers to clear the context (via @code{gptel-context-remove-all}), since a large context is typically the reason for a high cost.  Declining both prompts cancels the request with a @code{user-error}.
+
+@node Programmatic cost API
+@section Programmatic cost API
+
+@findex gptel-plus-compute-cost
+
+The cost estimation features described above (@ref{Cost estimation}) work automatically for interactive @code{gptel-send} calls.  For programmatic use via @code{gptel-request}, @samp{gptel-plus} provides a separate mechanism.
+
+When @samp{gptel-plus} is loaded, it advises @code{gptel--parse-response} to capture the raw token usage from each API response into the INFO plist under the key @code{:token-usage}.  This happens transparently for all requests, whether interactive or programmatic.
+
+The function @code{gptel-plus-compute-cost} takes the INFO plist passed to a @code{gptel-request} callback and returns the dollar cost as a float, or @code{nil} if usage data or model pricing is unavailable.  It handles Anthropic, OpenAI, and Gemini usage formats, including prompt caching.  An optional MODEL argument overrides the default @code{gptel-model}.
+
+Example usage:
+
+@lisp
+(gptel-request prompt
+  :callback (lambda (response info)
+              (let ((cost (gptel-plus-compute-cost info)))
+                (message "Cost: $%.4f" cost))))
+@end lisp
 
 @node Context persistence
 @section Context persistence
@@ -305,11 +330,14 @@ When activating @code{gptel-mode} automatically, @samp{gptel-plus} takes care no
 @node Cost computation
 @section Cost computation
 
+@findex gptel-plus-compute-cost
 @findex gptel-plus-get-total-cost
 @findex gptel-plus-get-input-cost
 @findex gptel-plus-get-output-cost
 @findex gptel-plus-normalize-cost
 @findex gptel-plus-update-context-cost
+
+The function @code{gptel-plus-compute-cost} computes the dollar cost of a @code{gptel-request} call from its INFO plist.  It accepts an optional MODEL argument (defaulting to @code{gptel-model}) and returns a float, or @code{nil} if usage data or pricing is unavailable.  It handles Anthropic, OpenAI, and Gemini usage formats, including prompt caching.  See @ref{Programmatic cost API} for details and a usage example.
 
 The function @code{gptel-plus-get-total-cost} returns the estimated total cost (in dollars) of sending the current prompt, or @code{nil} if cost information is unavailable for the active model.  It combines the input and output costs and normalizes the result.  This is the function used by the header line display (@ref{Header line display}).
 
@@ -358,7 +386,7 @@ The header line displays @samp{[Cost: N/A]} when the current model does not have
 @node Ex post cost not reported
 @section Ex post cost not reported
 
-The @emph{ex post} cost calculation currently works only with Anthropic models.  For other providers, the echo area message will not appear.  The @emph{ex ante} estimate in the header line is provider-agnostic and works for any model that has pricing properties set.
+The @emph{ex post} cost calculation supports Anthropic, OpenAI, and Gemini backends, in both streaming and non-streaming modes.  If the echo area message does not appear, check that the model has @code{:input-cost} and @code{:output-cost} properties set and that @code{gptel-plus-calculate-cost} is non-nil.
 
 If the cost calculation fails (e.g., due to unexpected log format changes in a new gptel version), a message of the form @samp{gptel-plus: failed to calculate cost: ...} will appear in the echo area instead of silently failing.
 
